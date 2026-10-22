@@ -181,10 +181,13 @@ export class WebhookDispatcher {
   async tick(now?: number, limit = 100): Promise<TickReport> {
     const clock = () => now ?? Date.now();
     const report: TickReport = { attempted: 0, delivered: 0, retried: 0, dead: 0, postponed: 0, conflicts: 0 };
-    const due = await this.store.due(clock(), limit);
+    // Rows of endpoints that an earlier tick is still sending to are skipped; ask for more so others are not starved.
+    const due = await this.store.due(clock(), this.draining.size ? limit * 2 : limit);
     const byEndpoint = new Map<string, Delivery[]>();
+    let taken = 0;
     for (const d of due) {
-      if (this.draining.has(d.endpointId)) continue;
+      if (this.draining.has(d.endpointId) || taken >= limit) continue;
+      taken++;
       byEndpoint.set(d.endpointId, [...(byEndpoint.get(d.endpointId) ?? []), d]);
     }
     const endpoints = due.length ? new Map((await this.listEndpoints()).map((e) => [e.id, e])) : new Map<string, Endpoint>();

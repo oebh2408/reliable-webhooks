@@ -9,6 +9,7 @@
 - `WebhookEvent.endpointIds`: send to specific endpoints only.
 - `DeliveryStore.counts()` and `DeliveryQuery.order`.
 - Ticks may overlap; a slow endpoint no longer delays the others.
+- Installable from GitHub (`npm install github:oebh2408/reliable-webhooks`); the package builds on install.
 
 ## 0.1.0
 

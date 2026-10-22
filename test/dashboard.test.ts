@@ -1,4 +1,4 @@
-import { createServer, type Server } from "node:http";
+import { createServer, request, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
@@ -138,6 +138,27 @@ describe("dashboard API", () => {
     expect((await fetch(base + "/api/overview")).status).toBe(401);
     expect((await fetch(base + "/api/overview", { headers: { authorization: "Bearer nope" } })).status).toBe(401);
     expect(await (await fetch(base + "/")).text()).toContain('content="true"');
+  });
+
+  it("deletes an endpoint with a plain DELETE", async () => {
+    const { base, call } = await setup();
+    await call("POST", "/api/endpoints", { id: "gone", url: "https://gone.example.com/" });
+    expect((await fetch(base + "/api/endpoints/gone", { method: "DELETE" })).status).toBe(200);
+    expect((await call("GET", "/api/endpoints/gone")).status).toBe(404);
+  });
+
+  it("without a token, answers only requests addressed to localhost (DNS rebinding)", async () => {
+    const { base } = await setup();
+    const status = await new Promise<number>((resolve, reject) => {
+      const url = new URL(base + "/api/overview");
+      request({ host: url.hostname, port: url.port, path: url.pathname, headers: { host: "evil.example:4000" } }, (res) => {
+        res.resume();
+        resolve(res.statusCode!);
+      })
+        .on("error", reject)
+        .end();
+    });
+    expect(status).toBe(403);
   });
 
   it("refuses writes that are not JSON, which blocks cross-site form posts", async () => {

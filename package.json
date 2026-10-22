@@ -55,7 +55,8 @@
     "demo:svg": "tsc && node scripts/render-demo.mjs",
     "dashboard": "npm run build && node dist/cli.js dashboard",
     "dev:dashboard": "vite --config dashboard/vite.config.ts",
-    "prepublishOnly": "npm run build && npm run typecheck && npm test"
+    "prepublishOnly": "npm run build && npm run typecheck && npm test",
+    "prepare": "npm run build"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.11",

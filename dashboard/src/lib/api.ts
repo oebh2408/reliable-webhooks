@@ -76,7 +76,7 @@ export const api = {
     request<Endpoint>("POST", "endpoints", input),
   updateEndpoint: (id: string, input: Partial<Pick<Endpoint, "url" | "description" | "eventTypes" | "paused">>) =>
     request<Endpoint>("PATCH", `endpoints/${enc(id)}`, input),
-  deleteEndpoint: (id: string) => request<{ deleted: boolean }>("DELETE", `endpoints/${enc(id)}`),
+  deleteEndpoint: (id: string) => request<{ deleted: boolean }>("DELETE", `endpoints/${enc(id)}`, {}),
   rotateSecret: (id: string) => request<Endpoint>("POST", `endpoints/${enc(id)}/secrets`, {}),
   removeSecret: (id: string, index: number) => request<Endpoint>("DELETE", `endpoints/${enc(id)}/secrets/${index}`, {}),
   enable: (id: string) => request<object>("POST", `endpoints/${enc(id)}/enable`, {}),

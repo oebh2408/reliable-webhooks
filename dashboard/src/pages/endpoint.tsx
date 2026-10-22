@@ -83,7 +83,7 @@ export function EndpointPage({ id }: { id: string }) {
         </Card>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid gap-6 lg:grid-cols-2 [&>*]:min-w-0">
         <SettingsCard endpoint={e} onSaved={reload} />
         <SecretsCard endpoint={e} onChange={reload} />
       </div>

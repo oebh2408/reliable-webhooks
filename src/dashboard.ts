@@ -203,8 +203,14 @@ export function createDashboard(options: DashboardOptions): Handler {
       const api = path.match(/\/api\/.*$/)?.[0];
       if (!api) throw new HttpError(404, "not found");
       if (!authorized(req)) throw new HttpError(401, "missing or wrong token");
-      if (req.method !== "GET") {
+      if (!token && !isLocalHost(req.headers.host)) {
+        // Without a token, only answer requests addressed to localhost. This stops DNS rebinding:
+        // a page on another domain that resolves to 127.0.0.1 still sends its own host name.
+        throw new HttpError(403, "without a token, the dashboard API only answers on localhost");
+      }
+      if (req.method === "POST") {
         // A JSON content type cannot be sent cross-site without a CORS preflight, which this server never approves.
+        // PATCH and DELETE always need a preflight.
         if (!String(req.headers["content-type"] ?? "").startsWith("application/json")) {
           throw new HttpError(415, "send JSON with content-type: application/json");
         }
@@ -229,6 +235,11 @@ export function createDashboard(options: DashboardOptions): Handler {
       return json(res, 500, { error: "internal error" });
     }
   };
+}
+
+function isLocalHost(host: string | undefined): boolean {
+  const name = (host ?? "").replace(/:\d+$/, "").replace(/^\[|\]$/g, "");
+  return name === "localhost" || name === "127.0.0.1" || name === "::1";
 }
 
 function json(res: ServerResponse, status: number, value: unknown): void {

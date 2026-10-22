@@ -21,7 +21,8 @@ Ship a dashboard as part of the package:
 Security:
 
 - With a `token`, every API call needs `Authorization: Bearer <token>`; the page asks for it and keeps it for the browser tab only.
-- Writes must be `application/json`. Browsers cannot send that cross-site without a CORS preflight, which the server never approves, so a malicious page cannot post to a dashboard on localhost.
+- Without a token, the API only answers requests whose `Host` is localhost, so a page on another domain cannot reach it through DNS rebinding.
+- `POST` requests must be `application/json`; `PATCH` and `DELETE` need a preflight anyway. Browsers cannot send that cross-site without a CORS preflight, which the server never approves, so a malicious page cannot post to a dashboard on localhost.
 - The page is served with a strict Content-Security-Policy (scripts only from the same origin) and `frame-ancestors 'none'`.
 - Lists and the overview never include secrets; only the endpoint detail does, because the operator needs to copy them.
 
