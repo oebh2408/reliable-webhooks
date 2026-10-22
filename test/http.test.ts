@@ -1,9 +1,9 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
-import { fetchTransport, MemoryDeliveryStore, nodeHandler, WebhookDispatcher, WebhookReceiver } from "reliable-webhooks";
+import { fetchTransport, generateSecret, MemoryDeliveryStore, nodeHandler, WebhookDispatcher, WebhookReceiver } from "reliable-webhooks";
 
-const SECRET = "whsec_dGVzdC1zZWNyZXQtMDEyMzQ1Njc4OQ==";
+const SECRET = generateSecret();
 let server: Server | undefined;
 afterEach(() => new Promise<void>((r) => (server ? server.close(() => r()) : r())));
 

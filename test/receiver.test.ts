@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { MemoryIdempotencyStore, signWebhook, WebhookReceiver, type ReceivedWebhook } from "reliable-webhooks";
+import { generateSecret, MemoryIdempotencyStore, signWebhook, WebhookReceiver, type ReceivedWebhook } from "reliable-webhooks";
 
 const T0 = Date.parse("2026-01-12T09:00:00Z");
-const SECRET = "whsec_dGVzdC1zZWNyZXQtMDEyMzQ1Njc4OQ==";
+const SECRET = generateSecret();
 const body = JSON.stringify({ type: "order.paid", timestamp: "2026-01-12T09:00:00.000Z", data: { orderId: 42 } });
 const request = (id = "msg_1", at = T0, payload = body) => ({
   headers: signWebhook({ id, timestamp: Math.floor(at / 1000), body: payload, secrets: [SECRET] }),
@@ -22,7 +22,7 @@ describe("receiver", () => {
   });
 
   it("answers 401 to a bad signature or a stale request without calling the handler", async () => {
-    const receiver = new WebhookReceiver({ secrets: ["whsec_b3RoZXItc2VjcmV0"] });
+    const receiver = new WebhookReceiver({ secrets: [generateSecret()] });
     let calls = 0;
     expect(await receiver.handle(request(), () => calls++, T0)).toMatchObject({
       status: 401,

@@ -56,6 +56,6 @@ text{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,"Li
 <text class="l19" x="28" y="484" xml:space="preserve"><tspan fill="#F4F2EC" ></tspan></text>
 <text class="l20" x="28" y="505" xml:space="preserve"><tspan fill="#F4F2EC" >  </tspan><tspan fill="#6FF2C6" >✓</tspan><tspan fill="#F4F2EC" > 434 deliveries, each handled exactly once by its receiver</tspan></text>
 <text class="l21" x="28" y="526" xml:space="preserve"><tspan fill="#F4F2EC" >  </tspan><tspan fill="#6FF2C6" >✓</tspan><tspan fill="#F4F2EC" > 70 dead letters redelivered after the receiver's secret was fixed</tspan></text>
-<text class="l22" x="28" y="547" xml:space="preserve"><tspan fill="#8B86A0" >  552 requests, 48 retries, 4 duplicates absorbed, 1 h 37 min simulated in 31 ms</tspan></text>
+<text class="l22" x="28" y="547" xml:space="preserve"><tspan fill="#8B86A0" >  552 requests, 48 retries, 4 duplicates absorbed, 1 h 37 min simulated in 32 ms</tspan></text>
 
 </svg>

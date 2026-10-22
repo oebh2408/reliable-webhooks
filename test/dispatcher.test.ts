@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  generateSecret,
   MemoryDeliveryStore,
   verifyWebhook,
   WebhookDispatcher,
@@ -11,7 +12,7 @@ import {
 } from "reliable-webhooks";
 
 const T0 = Date.parse("2026-01-12T09:00:00Z");
-const SECRET = "whsec_dGVzdC1zZWNyZXQtMDEyMzQ1Njc4OQ==";
+const SECRET = generateSecret();
 const endpoint: Endpoint = { id: "shop", url: "https://shop.example.test/hooks", secrets: [SECRET] };
 
 type Reply = TransportResponse | Error | Promise<TransportResponse>;

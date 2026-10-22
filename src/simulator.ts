@@ -92,6 +92,9 @@ export interface ScenarioResult {
   log: AttemptLogEntry[];
 }
 
+/** Deterministic, obviously fake secrets for the simulated endpoints. */
+const secretFor = (label: string) => `whsec_${Buffer.from(`simulated-${label}`).toString("base64")}`;
+
 const TYPES = ["order.created", "order.paid", "order.shipped", "invoice.issued"];
 const MIN = 60_000;
 
@@ -101,9 +104,9 @@ function endpoints(start: number, idempotency?: (endpointId: string) => Idempote
     behaviour: string,
     eventTypes: string[] | undefined,
     respond: (self: SimulatedEndpoint, req: OutgoingRequest, rng: () => number) => Promise<TransportResponse>,
-    receiverSecret = `whsec_${Buffer.from(`${id}-secret-0123456789`).toString("base64")}`,
+    receiverSecret = secretFor(id),
   ): SimulatedEndpoint => {
-    const secret = `whsec_${Buffer.from(`${id}-secret-0123456789`).toString("base64")}`;
+    const secret = secretFor(id);
     const self: SimulatedEndpoint = {
       endpoint: { id, url: `https://${id}.example.test/webhooks`, secrets: [secret], eventTypes },
       behaviour,
@@ -152,7 +155,7 @@ function endpoints(start: number, idempotency?: (endpointId: string) => Idempote
       "receiver has the wrong secret",
       ["invoice.issued", "order.paid"],
       async (self, req) => handle(self, req),
-      "whsec_c3RhbGUtc2VjcmV0LWZyb20tbGFzdC15ZWFy",
+      secretFor("stale-from-last-year"),
     ),
   ];
 }
