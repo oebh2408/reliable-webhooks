@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="842" height="596" viewBox="0 0 842 596" role="img" aria-label="Terminal demo: messages to five misbehaving endpoints, every delivery handled exactly once">
+<style>
+text{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;font-size:14px}
+@keyframes l0{0%,8.89%{opacity:0}9.69%,94%{opacity:1}100%{opacity:0}}.l0{opacity:0;animation:l0 18s linear infinite}
+@keyframes l1{0%,9.56%{opacity:0}10.36%,94%{opacity:1}100%{opacity:0}}.l1{opacity:0;animation:l1 18s linear infinite}
+@keyframes l2{0%,10.22%{opacity:0}11.02%,94%{opacity:1}100%{opacity:0}}.l2{opacity:0;animation:l2 18s linear infinite}
+@keyframes l3{0%,10.89%{opacity:0}11.69%,94%{opacity:1}100%{opacity:0}}.l3{opacity:0;animation:l3 18s linear infinite}
+@keyframes l4{0%,11.56%{opacity:0}12.36%,94%{opacity:1}100%{opacity:0}}.l4{opacity:0;animation:l4 18s linear infinite}
+@keyframes l5{0%,12.22%{opacity:0}13.02%,94%{opacity:1}100%{opacity:0}}.l5{opacity:0;animation:l5 18s linear infinite}
+@keyframes l6{0%,12.89%{opacity:0}13.69%,94%{opacity:1}100%{opacity:0}}.l6{opacity:0;animation:l6 18s linear infinite}
+@keyframes l7{0%,13.56%{opacity:0}14.36%,94%{opacity:1}100%{opacity:0}}.l7{opacity:0;animation:l7 18s linear infinite}
+@keyframes l8{0%,14.22%{opacity:0}15.02%,94%{opacity:1}100%{opacity:0}}.l8{opacity:0;animation:l8 18s linear infinite}
+@keyframes l9{0%,14.89%{opacity:0}15.69%,94%{opacity:1}100%{opacity:0}}.l9{opacity:0;animation:l9 18s linear infinite}
+@keyframes l10{0%,15.56%{opacity:0}16.36%,94%{opacity:1}100%{opacity:0}}.l10{opacity:0;animation:l10 18s linear infinite}
+@keyframes l11{0%,16.22%{opacity:0}17.02%,94%{opacity:1}100%{opacity:0}}.l11{opacity:0;animation:l11 18s linear infinite}
+@keyframes l12{0%,16.89%{opacity:0}17.69%,94%{opacity:1}100%{opacity:0}}.l12{opacity:0;animation:l12 18s linear infinite}
+@keyframes l13{0%,17.56%{opacity:0}18.36%,94%{opacity:1}100%{opacity:0}}.l13{opacity:0;animation:l13 18s linear infinite}
+@keyframes l14{0%,18.22%{opacity:0}19.02%,94%{opacity:1}100%{opacity:0}}.l14{opacity:0;animation:l14 18s linear infinite}
+@keyframes l15{0%,18.89%{opacity:0}19.69%,94%{opacity:1}100%{opacity:0}}.l15{opacity:0;animation:l15 18s linear infinite}
+@keyframes l16{0%,19.56%{opacity:0}20.36%,94%{opacity:1}100%{opacity:0}}.l16{opacity:0;animation:l16 18s linear infinite}
+@keyframes l17{0%,20.22%{opacity:0}21.02%,94%{opacity:1}100%{opacity:0}}.l17{opacity:0;animation:l17 18s linear infinite}
+@keyframes l18{0%,20.89%{opacity:0}21.69%,94%{opacity:1}100%{opacity:0}}.l18{opacity:0;animation:l18 18s linear infinite}
+@keyframes l19{0%,21.56%{opacity:0}22.36%,94%{opacity:1}100%{opacity:0}}.l19{opacity:0;animation:l19 18s linear infinite}
+@keyframes l20{0%,22.22%{opacity:0}23.02%,94%{opacity:1}100%{opacity:0}}.l20{opacity:0;animation:l20 18s linear infinite}
+@keyframes l21{0%,22.89%{opacity:0}23.69%,94%{opacity:1}100%{opacity:0}}.l21{opacity:0;animation:l21 18s linear infinite}
+@keyframes l22{0%,23.56%{opacity:0}24.36%,94%{opacity:1}100%{opacity:0}}.l22{opacity:0;animation:l22 18s linear infinite}
+@keyframes type{0%{width:0}2%{width:0}6.67%{width:118.02px}94%{width:118.02px}100%{width:0}}.type{animation:type 18s steps(14) infinite}
+</style>
+<rect width="842" height="596" rx="14" fill="#05050B"/>
+<rect x="0.5" y="0.5" width="841" height="595" rx="14" fill="none" stroke="#1E1B2E"/>
+<circle cx="24" cy="22" r="5.5" fill="#2A2638"/><circle cx="42" cy="22" r="5.5" fill="#2A2638"/><circle cx="60" cy="22" r="5.5" fill="#2A2638"/>
+<text x="421" y="26" text-anchor="middle" fill="#8B86A0" style="font-size:12px">reliable-webhooks</text>
+<line x1="0" y1="42" x2="842" y2="42" stroke="#1E1B2E"/>
+<clipPath id="typed"><rect class="type" x="44.86" y="47" height="21" width="0"/></clipPath>
+<text x="28" y="64" xml:space="preserve"><tspan fill="#6FF2C6">$</tspan></text>
+<text x="44.86" y="64" fill="#F4F2EC" clip-path="url(#typed)">npm run demo</text>
+<text class="l0" x="28" y="85" xml:space="preserve"><tspan fill="#F4F2EC" >  120 messages published to 5 endpoints over 5 minutes, 434 deliveries</tspan></text>
+<text class="l1" x="28" y="106" xml:space="preserve"><tspan fill="#F4F2EC" ></tspan></text>
+<text class="l2" x="28" y="127" xml:space="preserve"><tspan fill="#8B86A0" >  </tspan><tspan fill="#8B86A0" letter-spacing="2">ENDPOINTS</tspan></text>
+<text class="l3" x="28" y="148" xml:space="preserve"><tspan fill="#F4F2EC" ></tspan></text>
+<text class="l4" x="28" y="169" xml:space="preserve"><tspan fill="#F4F2EC" >  </tspan><tspan fill="#F4F2EC" >orders     </tspan><tspan fill="#8B86A0" >healthy, 5% of responses lost       </tspan><tspan fill="#6FF2C6" > 120/120</tspan><tspan fill="#F4F2EC" >   4 retries, 4 duplicates absorbed</tspan></text>
+<text class="l5" x="28" y="190" xml:space="preserve"><tspan fill="#F4F2EC" >  </tspan><tspan fill="#F4F2EC" >crm        </tspan><tspan fill="#8B86A0" >25% of requests fail with 503       </tspan><tspan fill="#6FF2C6" >   55/55</tspan><tspan fill="#F4F2EC" >   15 retries</tspan></text>
+<text class="l6" x="28" y="211" xml:space="preserve"><tspan fill="#F4F2EC" >  </tspan><tspan fill="#F4F2EC" >analytics  </tspan><tspan fill="#8B86A0" >down for 20 minutes                 </tspan><tspan fill="#6FF2C6" > 120/120</tspan><tspan fill="#F4F2EC" >   10 retries, breaker opened 6×</tspan></text>
+<text class="l7" x="28" y="232" xml:space="preserve"><tspan fill="#F4F2EC" >  </tspan><tspan fill="#F4F2EC" >partner    </tspan><tspan fill="#8B86A0" >rate limited, 4 requests per 10 s   </tspan><tspan fill="#6FF2C6" >   69/69</tspan><tspan fill="#F4F2EC" >   19 retries</tspan></text>
+<text class="l8" x="28" y="253" xml:space="preserve"><tspan fill="#F4F2EC" >  </tspan><tspan fill="#F4F2EC" >legacy     </tspan><tspan fill="#8B86A0" >receiver has the wrong secret       </tspan><tspan fill="#6FF2C6" >   70/70</tspan><tspan fill="#F4F2EC" >   70 dead letters, redelivered</tspan></text>
+<text class="l9" x="28" y="274" xml:space="preserve"><tspan fill="#F4F2EC" ></tspan></text>
+<text class="l10" x="28" y="295" xml:space="preserve"><tspan fill="#8B86A0" >  </tspan><tspan fill="#8B86A0" letter-spacing="2">ONE MESSAGE: msg_0044</tspan></text>
+<text class="l11" x="28" y="316" xml:space="preserve"><tspan fill="#F4F2EC" ></tspan></text>
+<text class="l12" x="28" y="337" xml:space="preserve"><tspan fill="#F4F2EC" >  </tspan><tspan fill="#8B86A0" >09:02:07</tspan><tspan fill="#F4F2EC" >  </tspan><tspan fill="#F4F2EC" >analytics  </tspan><tspan fill="#F2C46D" >ECONNREFUSED</tspan><tspan fill="#F4F2EC" >  </tspan><tspan fill="#F2C46D" >retry in 5 s</tspan></text>
+<text class="l13" x="28" y="358" xml:space="preserve"><tspan fill="#F4F2EC" >  </tspan><tspan fill="#8B86A0" >09:02:07</tspan><tspan fill="#F4F2EC" >  </tspan><tspan fill="#F4F2EC" >legacy     </tspan><tspan fill="#F2C46D" >401</tspan><tspan fill="#F4F2EC" >           </tspan><tspan fill="#FF7B8A" >dead letter (rejected)</tspan></text>
+<text class="l14" x="28" y="379" xml:space="preserve"><tspan fill="#F4F2EC" >  </tspan><tspan fill="#8B86A0" >09:02:07</tspan><tspan fill="#F4F2EC" >  </tspan><tspan fill="#F4F2EC" >orders     </tspan><tspan fill="#6FF2C6" >200</tspan><tspan fill="#F4F2EC" >           </tspan><tspan fill="#6FF2C6" >delivered</tspan></text>
+<text class="l15" x="28" y="400" xml:space="preserve"><tspan fill="#F4F2EC" >  </tspan><tspan fill="#8B86A0" >09:03:40</tspan><tspan fill="#F4F2EC" >  </tspan><tspan fill="#F4F2EC" >analytics  </tspan><tspan fill="#F2C46D" >ECONNREFUSED</tspan><tspan fill="#F4F2EC" >  </tspan><tspan fill="#F2C46D" >retry in 20 s, breaker open for 2 min</tspan></text>
+<text class="l16" x="28" y="421" xml:space="preserve"><tspan fill="#F4F2EC" >  </tspan><tspan fill="#8B86A0" >09:09:40</tspan><tspan fill="#F4F2EC" >  </tspan><tspan fill="#F4F2EC" >analytics  </tspan><tspan fill="#F2C46D" >ECONNREFUSED</tspan><tspan fill="#F4F2EC" >  </tspan><tspan fill="#F2C46D" >retry in 2 min, breaker open for 8 min</tspan></text>
+<text class="l17" x="28" y="442" xml:space="preserve"><tspan fill="#F4F2EC" >  </tspan><tspan fill="#8B86A0" >09:33:40</tspan><tspan fill="#F4F2EC" >  </tspan><tspan fill="#F4F2EC" >analytics  </tspan><tspan fill="#6FF2C6" >200</tspan><tspan fill="#F4F2EC" >           </tspan><tspan fill="#6FF2C6" >delivered</tspan></text>
+<text class="l18" x="28" y="463" xml:space="preserve"><tspan fill="#F4F2EC" >  </tspan><tspan fill="#8B86A0" >10:37:08</tspan><tspan fill="#F4F2EC" >  </tspan><tspan fill="#F4F2EC" >legacy     </tspan><tspan fill="#6FF2C6" >200</tspan><tspan fill="#F4F2EC" >           </tspan><tspan fill="#6FF2C6" >delivered after redelivery</tspan></text>
+<text class="l19" x="28" y="484" xml:space="preserve"><tspan fill="#F4F2EC" ></tspan></text>
+<text class="l20" x="28" y="505" xml:space="preserve"><tspan fill="#F4F2EC" >  </tspan><tspan fill="#6FF2C6" >✓</tspan><tspan fill="#F4F2EC" > 434 deliveries, each handled exactly once by its receiver</tspan></text>
+<text class="l21" x="28" y="526" xml:space="preserve"><tspan fill="#F4F2EC" >  </tspan><tspan fill="#6FF2C6" >✓</tspan><tspan fill="#F4F2EC" > 70 dead letters redelivered after the receiver's secret was fixed</tspan></text>
+<text class="l22" x="28" y="547" xml:space="preserve"><tspan fill="#8B86A0" >  552 requests, 48 retries, 4 duplicates absorbed, 1 h 37 min simulated in 31 ms</tspan></text>
+
+</svg>

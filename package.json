@@ -1,0 +1,63 @@
+{
+  "name": "reliable-webhooks",
+  "version": "0.1.0",
+  "description": "Send and receive webhooks with retries, backoff, signatures, idempotency and dead letters. Zero runtime dependencies.",
+  "keywords": [
+    "webhooks",
+    "webhook",
+    "retry",
+    "backoff",
+    "hmac",
+    "signature",
+    "idempotency",
+    "dead-letter-queue",
+    "outbox",
+    "circuit-breaker",
+    "standard-webhooks",
+    "typescript"
+  ],
+  "author": "Oscar Benavides (https://ob0.dev)",
+  "license": "MIT",
+  "homepage": "https://github.com/oebh2408/reliable-webhooks#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oebh2408/reliable-webhooks.git"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "reliable-webhooks": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc -p tsconfig.examples.json",
+    "test": "vitest run",
+    "demo": "tsc && node dist/cli.js",
+    "demo:svg": "tsc && node scripts/render-demo.mjs",
+    "prepublishOnly": "npm run build && npm run typecheck && npm test"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.11",
+    "@types/node": "^22.20.5",
+    "@types/pg": "^8.23.1",
+    "pg": "^8.23.1",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.5"
+  }
+}
