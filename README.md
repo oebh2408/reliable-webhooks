@@ -26,6 +26,8 @@ This library handles both sides. The sender keeps an outbox, retries with backof
 | Sending process crashes mid-request | Delivery stuck or lost | Lease expires and another worker takes it over |
 | Webhook published, then the transaction rolls back | Webhook for something that never happened | `prepare()` lets you write the delivery in the same transaction |
 | Forged or replayed request | Receiver acts on it | HMAC signature over id, timestamp and body; timestamps older than 5 minutes rejected |
+| Endpoint URL points at an internal address | The sender calls its own network (SSRF) | Private, loopback, link-local and reserved addresses are refused after DNS resolution |
+| Endpoint can only take so much traffic | A backlog arrives all at once | `rateLimit` (requests per second) and `maxConcurrency` per endpoint |
 
 ## Dashboard
 
@@ -129,6 +131,22 @@ await dispatcher.redeliver({ endpointId: "crm" });
 
 All values are options (`retry`, `breaker`, `timeoutMs`, `leaseMs`). Why 4xx is not retried: [ADR 0002](docs/adr/0002-retry-policy.md). How the breaker works: [ADR 0004](docs/adr/0004-circuit-breaker-per-endpoint.md).
 
+### Internal addresses and limits
+
+The default transport refuses to connect to private, loopback, link-local and reserved addresses, so an endpoint URL entered by a user cannot reach your internal network or a metadata service. The check runs on the address the connection actually uses, after DNS, so a name that resolves differently later does not get around it. A refused request is dead-lettered with the error `blocked-address`. To send to services on your own network:
+
+```ts
+new WebhookDispatcher({ store, endpoints, transport: httpTransport({ allowPrivateNetworks: true }) });
+```
+
+Each endpoint can also set how much traffic it takes:
+
+```ts
+{ id: "crm", url: "https://crm.example.com/hooks", secrets: ["whsec_..."], rateLimit: 5, maxConcurrency: 2, timeoutMs: 5_000 }
+```
+
+`rateLimit` is requests per second; deliveries over it wait without using up attempts. `maxConcurrency` (default 1) is how many requests to that endpoint are in flight at once. Both apply per dispatcher process ([ADR 0008](docs/adr/0008-network-guard-and-endpoint-limits.md)).
+
 ## Receiving
 
 ```ts
@@ -210,9 +228,9 @@ With the circuit breaker on, the analytics endpoint receives 10 requests during 
 ## Not handled
 
 - Ordering. Deliveries to one endpoint are sent in due order within a tick, but a retried message can arrive after newer ones. Receivers that care should compare the event's own timestamp or version.
-- Endpoint URLs are not validated. If endpoints come from users, check them before registering, so they cannot point at internal addresses.
 - Cleanup of delivered rows. Delete them on your own schedule.
-- Payload size limits, and per-endpoint concurrency above one request at a time per worker.
+- Payload size limits.
+- Rate limits shared between processes. `rateLimit` is enforced per dispatcher; with several, divide it between them.
 - Users, roles and an audit log in the dashboard. It has one shared token; put it behind your own authentication if you need more.
 
 ## API
@@ -235,7 +253,9 @@ With the circuit breaker on, the analytics endpoint receives 10 requests during 
 | `MemoryDeliveryStore` / `MemoryEndpointStore` / `MemoryIdempotencyStore` | Reference stores |
 | `createDashboard({ dispatcher, endpoints, token? })` | `node:http` handler for the dashboard page and its API |
 | `startPlayground(options?)` | The dashboard with simulated receivers, as in `npm run dashboard` |
-| `fetchTransport()` | The default transport, on global `fetch` |
+| `httpTransport({ allowPrivateNetworks?, tls? })` | The default transport, on `node:http`; refuses private addresses unless allowed |
+| `fetchTransport()` | A transport on global `fetch`, for runtimes without `node:http`; does not check addresses |
+| `isPrivateAddress(ip)` | The address check used by `httpTransport` |
 | `runScenario(options?)` | The simulator |
 
 ## Design decisions
@@ -247,6 +267,7 @@ With the circuit breaker on, the analytics endpoint receives 10 requests during 
 - [0005 · The outbox: a store with leases and conditional updates](docs/adr/0005-outbox-store-with-leases.md)
 - [0006 · An explicit clock](docs/adr/0006-explicit-clock.md)
 - [0007 · A dashboard served by the library](docs/adr/0007-dashboard.md)
+- [0008 · Private addresses, rate limits and concurrency per endpoint](docs/adr/0008-network-guard-and-endpoint-limits.md)
 
 ## Development
 

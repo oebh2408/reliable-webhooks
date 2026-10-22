@@ -140,7 +140,14 @@ export function EndpointPage({ id }: { id: string }) {
 }
 
 function SettingsCard({ endpoint, onSaved }: { endpoint: Endpoint; onSaved: () => unknown }) {
-  const initial = () => ({ url: endpoint.url, description: endpoint.description ?? "", eventTypes: endpoint.eventTypes?.join(", ") ?? "" });
+  const initial = () => ({
+    url: endpoint.url,
+    description: endpoint.description ?? "",
+    eventTypes: endpoint.eventTypes?.join(", ") ?? "",
+    rateLimit: endpoint.rateLimit?.toString() ?? "",
+    maxConcurrency: endpoint.maxConcurrency?.toString() ?? "",
+    timeoutMs: endpoint.timeoutMs?.toString() ?? "",
+  });
   const [form, setForm] = useState(initial);
   const [dirty, setDirty] = useState(false);
   const { run, busy } = useAction();
@@ -148,7 +155,7 @@ function SettingsCard({ endpoint, onSaved }: { endpoint: Endpoint; onSaved: () =
   useEffect(() => {
     if (!dirty) setForm(initial());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [endpoint.url, endpoint.description, endpoint.eventTypes?.join(), dirty]);
+  }, [endpoint.url, endpoint.description, endpoint.eventTypes?.join(), endpoint.rateLimit, endpoint.maxConcurrency, endpoint.timeoutMs, dirty]);
   const field = (key: keyof ReturnType<typeof initial>) => ({
     value: form[key],
     onChange: (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -173,6 +180,9 @@ function SettingsCard({ endpoint, onSaved }: { endpoint: Endpoint; onSaved: () =
                   url: form.url,
                   description: form.description,
                   eventTypes: form.eventTypes.split(",").map((s) => s.trim()).filter(Boolean),
+                  rateLimit: form.rateLimit === "" ? null : Number(form.rateLimit),
+                  maxConcurrency: form.maxConcurrency === "" ? null : Number(form.maxConcurrency),
+                  timeoutMs: form.timeoutMs === "" ? null : Number(form.timeoutMs),
                 }),
               "Saved",
               onSaved,
@@ -191,6 +201,20 @@ function SettingsCard({ endpoint, onSaved }: { endpoint: Endpoint; onSaved: () =
           <div className="grid gap-2">
             <Label htmlFor="description">Description</Label>
             <Input id="description" {...field("description")} />
+          </div>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div className="grid gap-2">
+              <Label htmlFor="rate">Rate (req/s)</Label>
+              <Input id="rate" type="number" min={0.01} step="any" placeholder="No limit" {...field("rateLimit")} />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="concurrency">Concurrency</Label>
+              <Input id="concurrency" type="number" min={1} max={50} step={1} placeholder="1" {...field("maxConcurrency")} />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="timeout">Timeout (ms)</Label>
+              <Input id="timeout" type="number" min={100} max={120000} step={1} placeholder="Default" {...field("timeoutMs")} />
+            </div>
           </div>
           <div className="flex justify-end gap-2">
             {dirty && (

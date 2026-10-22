@@ -1,11 +1,68 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
+import http, { type IncomingMessage, type ServerResponse } from "node:http";
+import https from "node:https";
+import { isIP } from "node:net";
+import { BlockedAddressError, guardedLookup, isPrivateAddress } from "./network.js";
 import type { ReceivedWebhook, WebhookReceiver } from "./receiver.js";
 import type { Transport } from "./types.js";
 
+export interface HttpTransportOptions {
+  /**
+   * Allow endpoints on loopback, private and link-local addresses. Off by
+   * default, so an endpoint URL entered by a user cannot be used to reach
+   * internal services. Turn it on when every endpoint is your own.
+   */
+  allowPrivateNetworks?: boolean;
+  /** Extra options for `https.request`, for example a custom CA. */
+  tls?: https.RequestOptions;
+}
+
 /**
- * Sends requests with the global `fetch` (Node 18+). Redirects are not
- * followed: a 3xx counts as a rejection, so a moved endpoint shows up in the
- * dead letters instead of silently posting somewhere else.
+ * The default transport, on `node:http` and `node:https`. Redirects are not
+ * followed (a 3xx is a rejection). Unless `allowPrivateNetworks` is set, it
+ * refuses to connect to private or reserved addresses, checking the address
+ * actually used for the connection.
+ */
+export function httpTransport(options: HttpTransportOptions = {}): Transport {
+  return (req) =>
+    new Promise((resolve, reject) => {
+      const url = new URL(req.url);
+      const client = url.protocol === "https:" ? https : url.protocol === "http:" ? http : undefined;
+      if (!client) return reject(new Error(`unsupported protocol ${url.protocol}`));
+      const host = url.hostname.replace(/^\[|\]$/g, "");
+      if (!options.allowPrivateNetworks && isIP(host) && isPrivateAddress(host)) {
+        return reject(new BlockedAddressError(host, host));
+      }
+      const started = Date.now();
+      const request = client.request(url, {
+        ...options.tls,
+        method: "POST",
+        headers: { ...req.headers, "content-length": String(Buffer.byteLength(req.body)) },
+        lookup: options.allowPrivateNetworks ? undefined : (guardedLookup as never),
+      });
+      const timer = setTimeout(
+        () => request.destroy(Object.assign(new Error("request timed out"), { name: "TimeoutError" })),
+        req.timeoutMs,
+      );
+      request.on("response", (res) => {
+        clearTimeout(timer);
+        // The response body is not used; drain it so the connection can be reused.
+        res.resume();
+        const retryAfter = res.headers["retry-after"];
+        resolve({ status: res.statusCode ?? 0, headers: { "retry-after": Array.isArray(retryAfter) ? retryAfter[0] : retryAfter }, durationMs: Date.now() - started });
+      });
+      request.on("error", (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+      request.end(req.body);
+    });
+}
+
+/**
+ * Sends requests with the global `fetch` (Node 18+), or one you pass.
+ * Redirects are not followed. Unlike {@link httpTransport} it does not block
+ * private addresses; use it for runtimes without `node:http`, or to plug in
+ * a custom fetch.
  */
 export function fetchTransport(options: { fetch?: typeof fetch } = {}): Transport {
   const doFetch = options.fetch ?? fetch;

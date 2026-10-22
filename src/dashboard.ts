@@ -266,7 +266,22 @@ function fields(body: any): Partial<Endpoint> {
       .filter(Boolean);
     out.eventTypes = types.length ? types : undefined;
   }
+  out.rateLimit = limit(body, "rateLimit", 0.01, 10_000, false);
+  out.maxConcurrency = limit(body, "maxConcurrency", 1, 50, true);
+  out.timeoutMs = limit(body, "timeoutMs", 100, 120_000, true);
+  for (const key of ["rateLimit", "maxConcurrency", "timeoutMs"] as const) if (typeof body !== "object" || !body || !(key in body)) delete out[key];
   return out;
+}
+
+/** A numeric endpoint limit: null or "" clears it, anything else must be in range. */
+function limit(body: any, key: string, min: number, max: number, integer: boolean): number | undefined {
+  const value = body?.[key];
+  if (value === undefined || value === null || value === "") return undefined;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < min || n > max || (integer && !Number.isInteger(n))) {
+    throw new HttpError(400, `${key} must be ${integer ? "an integer" : "a number"} from ${min} to ${max}`);
+  }
+  return n;
 }
 
 function validUrl(value: unknown): string {

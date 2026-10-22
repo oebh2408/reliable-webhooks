@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 import { createDashboard } from "./dashboard.js";
 import { WebhookDispatcher } from "./dispatcher.js";
 import { MemoryEndpointStore } from "./endpoints.js";
-import { readBody } from "./http.js";
+import { httpTransport, readBody } from "./http.js";
 import { MemoryIdempotencyStore, WebhookReceiver } from "./receiver.js";
 import { generateSecret } from "./signature.js";
 import { MemoryDeliveryStore } from "./store.js";
@@ -96,6 +96,8 @@ export async function startPlayground(options: PlaygroundOptions = {}): Promise<
   const dispatcher = new WebhookDispatcher({
     store: new MemoryDeliveryStore(),
     endpoints,
+    // The playground's receivers are on localhost.
+    transport: httpTransport({ allowPrivateNetworks: true }),
     timeoutMs: 2_000,
     leaseMs: 10_000,
     // Shorter than the defaults, so that retries are visible while watching.

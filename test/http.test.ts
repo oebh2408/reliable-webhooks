@@ -1,7 +1,17 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
-import { fetchTransport, generateSecret, MemoryDeliveryStore, nodeHandler, WebhookDispatcher, WebhookReceiver } from "reliable-webhooks";
+import {
+  BlockedAddressError,
+  fetchTransport,
+  generateSecret,
+  httpTransport,
+  isPrivateAddress,
+  MemoryDeliveryStore,
+  nodeHandler,
+  WebhookDispatcher,
+  WebhookReceiver,
+} from "reliable-webhooks";
 
 const SECRET = generateSecret();
 let server: Server | undefined;
@@ -58,5 +68,55 @@ describe("over real HTTP", () => {
     await dispatcher.publish({ type: "a", payload: {} });
     await dispatcher.tick();
     expect((await store.list({}))[0]!).toMatchObject({ status: "dead", deadReason: "rejected" });
+  });
+});
+
+describe("httpTransport", () => {
+  const request = (url: string) => ({ url, headers: {}, body: "{}", timeoutMs: 1000, now: 0 });
+
+  it("recognizes private and reserved addresses", () => {
+    for (const a of ["127.0.0.1", "10.1.2.3", "172.20.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "::1", "[::1]", "fd00::1", "fe80::1", "::ffff:127.0.0.1", "::ffff:7f00:1", "64:ff9b::10.0.0.1"]) {
+      expect(isPrivateAddress(a), a).toBe(true);
+    }
+    for (const a of ["93.184.215.14", "1.1.1.1", "2606:4700:4700::1111", "::ffff:8.8.8.8", "example.com"]) {
+      expect(isPrivateAddress(a), a).toBe(false);
+    }
+  });
+
+  it("refuses private addresses, given literally or through DNS", async () => {
+    const url = await listen((_, res) => void res.writeHead(200).end());
+    const port = new URL(url).port;
+    const send = httpTransport();
+    for (const target of [url, `http://localhost:${port}/hooks`, `http://[::ffff:127.0.0.1]:${port}/hooks`]) {
+      await expect(send(request(target)), target).rejects.toBeInstanceOf(BlockedAddressError);
+    }
+  });
+
+  it("reaches private addresses when allowed, and reports status and Retry-After", async () => {
+    const url = await listen((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => void res.writeHead(body === "{}" ? 429 : 400, { "retry-after": "7" }).end());
+    });
+    const res = await httpTransport({ allowPrivateNetworks: true })(request(url));
+    expect(res).toMatchObject({ status: 429, headers: { "retry-after": "7" } });
+  });
+
+  it("times out a slow receiver", async () => {
+    const url = await listen(() => undefined);
+    const send = httpTransport({ allowPrivateNetworks: true });
+    await expect(send({ ...request(url), timeoutMs: 100 })).rejects.toMatchObject({ name: "TimeoutError" });
+    server!.closeAllConnections();
+  });
+
+  it("dead-letters a delivery to a blocked address without retrying", async () => {
+    const url = await listen((_, res) => void res.writeHead(200).end());
+    const store = new MemoryDeliveryStore();
+    const dispatcher = new WebhookDispatcher({ store, endpoints: [{ id: "internal", url, secrets: [SECRET] }] });
+    await dispatcher.publish({ type: "a", payload: {} });
+    await dispatcher.tick();
+    const d = (await store.list({}))[0]!;
+    expect(d).toMatchObject({ status: "dead", deadReason: "rejected", attempts: 1 });
+    expect(d.history[0]).toMatchObject({ status: 0, error: "blocked-address" });
   });
 });

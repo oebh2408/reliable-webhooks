@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { fetchTransport } from "./http.js";
+import { httpTransport } from "./http.js";
 import { classify, defaultRetryPolicy, parseRetryAfter, retryDelay, type Outcome, type RetryPolicy } from "./retry.js";
 import { signWebhook } from "./signature.js";
 import type { EndpointStore } from "./endpoints.js";
@@ -21,7 +21,7 @@ export interface DispatcherOptions {
   store: DeliveryStore;
   /** A fixed list, or an {@link EndpointStore} that is read on every publish and tick. */
   endpoints: Endpoint[] | EndpointStore;
-  /** Sends the requests. Defaults to {@link fetchTransport}. */
+  /** Sends the requests. Defaults to {@link httpTransport}, which refuses private addresses. */
   transport?: Transport;
   retry?: Partial<RetryPolicy>;
   /** Per-endpoint circuit breaker; `false` turns it off. */
@@ -92,11 +92,12 @@ export class WebhookDispatcher {
   private readonly deadListeners: ((d: Delivery) => void)[] = [];
   /** Endpoints this dispatcher is sending to right now, so overlapping ticks leave them alone. */
   private readonly draining = new Set<string>();
+  private readonly buckets = new Map<string, { tokens: number; at: number }>();
 
   constructor(options: DispatcherOptions) {
     this.store = options.store;
     this.setEndpoints(options.endpoints);
-    this.transport = options.transport ?? fetchTransport();
+    this.transport = options.transport ?? httpTransport();
     this.retry = { ...defaultRetryPolicy, ...options.retry };
     this.breaker = options.breaker === false ? undefined : { ...defaultBreaker, ...options.breaker };
     this.timeoutMs = options.timeoutMs ?? 15_000;
@@ -258,34 +259,36 @@ export class WebhookDispatcher {
     const before = (await this.store.getEndpointState(endpointId)) ?? emptyState(endpointId);
     const state = { ...before };
 
-    for (const delivery of list) {
+    const deliverOne = async (delivery: Delivery): Promise<void> => {
       const now = clock();
       if (!endpoint || state.disabled) {
         await this.finish(delivery, delivery.version, { status: "dead", deadAt: now, deadReason: "endpoint-unavailable" }, report);
-        continue;
+        return;
       }
       if (now - delivery.cycleStartedAt > this.retry.maxAgeMs) {
         await this.finish(delivery, delivery.version, { status: "dead", deadAt: now, deadReason: "expired" }, report);
-        continue;
+        return;
       }
-      if (state.openUntil > now || endpoint.paused) {
-        const until = endpoint.paused ? now + PAUSE_RECHECK_MS : state.openUntil;
+      const wait = state.openUntil > now || endpoint.paused ? 0 : this.rateWait(endpoint, now);
+      if (state.openUntil > now || endpoint.paused || wait > 0) {
+        const until = endpoint.paused ? now + PAUSE_RECHECK_MS : wait > 0 ? now + wait : state.openUntil;
         const ok = await this.store.update({ ...delivery, status: "pending", nextAttemptAt: until }, delivery.version);
         if (ok) report.postponed++;
         else report.conflicts++;
-        continue;
+        return;
       }
 
       // Take the lease. If the worker dies after this, the delivery comes due again when the lease expires.
       const claimed: Delivery = { ...delivery, status: "sending", nextAttemptAt: now + this.leaseMs };
       if (!(await this.store.update(claimed, delivery.version))) {
         report.conflicts++;
-        continue;
+        return;
       }
       const version = delivery.version + 1;
 
       const { attempt, retryAfterMs } = await this.send(endpoint, delivery, now);
-      const outcome = classify(attempt.status);
+      // Sending again will not change the address, so a blocked request is a rejection.
+      const outcome = attempt.error === BLOCKED ? "reject" : classify(attempt.status);
       const done = clock();
       const history = [...delivery.history, attempt].slice(-this.historyLimit);
       const attempts = delivery.attempts + 1;
@@ -315,7 +318,7 @@ export class WebhookDispatcher {
               : { ...base, status: "pending", nextAttemptAt: next };
       } else {
         // The endpoint answered, so it is up; only the request was refused.
-        Object.assign(state, { failures: 0, opened: 0, openUntil: 0 });
+        if (attempt.status) Object.assign(state, { failures: 0, opened: 0, openUntil: 0 });
         if (outcome === "gone") state.disabled = true;
         result = dead(base, done, outcome === "gone" ? "gone" : "rejected");
       }
@@ -323,9 +326,39 @@ export class WebhookDispatcher {
       await this.finish(delivery, version, result, report);
       if (result.status === "pending") report.retried++;
       this.emitAttempt({ delivery: { ...result, version: version + 1 }, attempt, outcome, breakerOpenedUntil });
-    }
+    };
+
+    // Up to maxConcurrency requests to this endpoint at a time; the breaker state is shared between them.
+    const queue = [...list];
+    const wanted = Math.floor(endpoint?.maxConcurrency ?? 1);
+    const lanes = Number.isFinite(wanted) ? Math.max(1, Math.min(MAX_CONCURRENCY, wanted)) : 1;
+    await Promise.all(
+      Array.from({ length: lanes }, async () => {
+        for (let d = queue.shift(); d; d = queue.shift()) await deliverOne(d);
+      }),
+    );
 
     if (JSON.stringify(state) !== JSON.stringify(before)) await this.store.saveEndpointState(state);
+  }
+
+  /**
+   * Token bucket per endpoint for `rateLimit` (requests per second). Returns 0
+   * and takes a token if one is available, otherwise how long until one is.
+   * Kept in memory, so the limit applies per dispatcher.
+   */
+  private rateWait(endpoint: Endpoint, now: number): number {
+    const rate = endpoint.rateLimit;
+    if (!rate || rate <= 0) return 0;
+    const capacity = Math.max(1, rate);
+    const bucket = this.buckets.get(endpoint.id) ?? { tokens: capacity, at: now };
+    bucket.tokens = Math.min(capacity, bucket.tokens + (Math.max(0, now - bucket.at) * rate) / 1000);
+    bucket.at = now;
+    this.buckets.set(endpoint.id, bucket);
+    if (bucket.tokens >= 1) {
+      bucket.tokens -= 1;
+      return 0;
+    }
+    return Math.ceil(((1 - bucket.tokens) * 1000) / rate);
   }
 
   private async send(endpoint: Endpoint, delivery: Delivery, now: number): Promise<{ attempt: Attempt; retryAfterMs?: number }> {
@@ -376,6 +409,12 @@ export class WebhookDispatcher {
   }
 }
 
+/** Attempt error for a request the transport refused to send to a private address. */
+const BLOCKED = "blocked-address";
+
+/** Upper bound for `Endpoint.maxConcurrency`. */
+const MAX_CONCURRENCY = 50;
+
 /** How often deliveries to a paused endpoint are looked at again. */
 const PAUSE_RECHECK_MS = 10_000;
 
@@ -391,6 +430,7 @@ function describe(err: unknown): string {
   const e = err as { name?: string; code?: string; cause?: { code?: string } };
   if (e?.name === "TimeoutError" || e?.name === "AbortError") return "timeout";
   const code = e?.cause?.code ?? e?.code;
+  if (code === "ERR_BLOCKED_ADDRESS") return BLOCKED;
   // fetch reports a connection closed by the server as an undici socket error.
   if (code === "UND_ERR_SOCKET") return "ECONNRESET";
   return code ?? e?.name ?? "network";

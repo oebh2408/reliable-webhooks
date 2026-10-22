@@ -74,7 +74,11 @@ export const api = {
   endpoint: (id: string) => request<Endpoint & { state: EndpointState | null }>("GET", `endpoints/${enc(id)}`),
   createEndpoint: (input: { id?: string; url: string; description?: string; eventTypes?: string[] }) =>
     request<Endpoint>("POST", "endpoints", input),
-  updateEndpoint: (id: string, input: Partial<Pick<Endpoint, "url" | "description" | "eventTypes" | "paused">>) =>
+  updateEndpoint: (
+    id: string,
+    input: Partial<Pick<Endpoint, "url" | "description" | "eventTypes" | "paused">> &
+      Partial<Record<"rateLimit" | "maxConcurrency" | "timeoutMs", number | null>>,
+  ) =>
     request<Endpoint>("PATCH", `endpoints/${enc(id)}`, input),
   deleteEndpoint: (id: string) => request<{ deleted: boolean }>("DELETE", `endpoints/${enc(id)}`, {}),
   rotateSecret: (id: string) => request<Endpoint>("POST", `endpoints/${enc(id)}/secrets`, {}),

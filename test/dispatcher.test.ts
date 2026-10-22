@@ -246,6 +246,37 @@ describe("dispatcher", () => {
     expect((await only(store)).deadReason).toBe("endpoint-unavailable");
   });
 
+  it("holds deliveries back to the endpoint's rate limit without using attempts", async () => {
+    const { store, dispatcher, requests } = setup(ok, { endpoints: [{ ...endpoint, rateLimit: 2 }] });
+    for (let i = 0; i < 5; i++) await dispatcher.publish({ type: "a", payload: { i } }, T0);
+    expect(await dispatcher.tick(T0)).toMatchObject({ attempted: 2, postponed: 3 });
+    const waiting = await store.list({ status: "pending" });
+    expect(waiting.map((d) => [d.attempts, d.nextAttemptAt])).toEqual([[0, T0 + 500], [0, T0 + 500], [0, T0 + 500]]);
+    expect(await dispatcher.tick(T0 + 500)).toMatchObject({ attempted: 1, postponed: 2 });
+    expect(await dispatcher.tick(T0 + 1_500)).toMatchObject({ attempted: 2, postponed: 0 });
+    expect(requests).toHaveLength(5);
+  });
+
+  it("sends up to maxConcurrency requests to an endpoint at once", async () => {
+    for (const [maxConcurrency, expected] of [[undefined, 1], [3, 3]] as const) {
+      let inFlight = 0;
+      let peak = 0;
+      const { store, dispatcher } = setup(
+        async () => {
+          peak = Math.max(peak, ++inFlight);
+          await new Promise((r) => setTimeout(r, 10));
+          inFlight--;
+          return { status: 200 };
+        },
+        { endpoints: [{ ...endpoint, maxConcurrency }] },
+      );
+      for (let i = 0; i < 7; i++) await dispatcher.publish({ type: "a", payload: { i } }, T0);
+      expect(await dispatcher.tick(T0)).toMatchObject({ attempted: 7, delivered: 7 });
+      expect(peak).toBe(expected);
+      expect(await store.counts()).toEqual([{ endpointId: "shop", status: "delivered", count: 7 }]);
+    }
+  });
+
   it("requires the lease to outlast the timeout", () => {
     expect(() => setup(ok, { timeoutMs: 60_000, leaseMs: 30_000 })).toThrow(/leaseMs/);
   });

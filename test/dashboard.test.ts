@@ -122,6 +122,20 @@ describe("dashboard API", () => {
     expect(sent).toHaveLength(1);
   });
 
+  it("sets, validates and clears per-endpoint limits", async () => {
+    const { call, endpoints } = await setup();
+    await call("POST", "/api/endpoints", { id: "shop", url: "https://shop.example.com/" });
+    const set = await call("PATCH", "/api/endpoints/shop", { rateLimit: 5, maxConcurrency: 4, timeoutMs: 3000 });
+    expect(set.body).toMatchObject({ rateLimit: 5, maxConcurrency: 4, timeoutMs: 3000 });
+    expect((await call("PATCH", "/api/endpoints/shop", { maxConcurrency: 51 })).status).toBe(400);
+    expect((await call("PATCH", "/api/endpoints/shop", { maxConcurrency: 1.5 })).status).toBe(400);
+    expect((await call("PATCH", "/api/endpoints/shop", { rateLimit: "fast" })).status).toBe(400);
+    // Fields left out are kept; null clears.
+    await call("PATCH", "/api/endpoints/shop", { description: "Shop", rateLimit: null });
+    expect(await endpoints.get("shop")).toMatchObject({ description: "Shop", maxConcurrency: 4, timeoutMs: 3000 });
+    expect((await endpoints.get("shop"))!.rateLimit).toBeUndefined();
+  });
+
   it("sends test events only to the chosen endpoint, whatever its event types", async () => {
     const { call, dispatcher, sent } = await setup();
     await call("POST", "/api/endpoints", { id: "a", url: "https://a.example.com/", eventTypes: ["order.paid"] });

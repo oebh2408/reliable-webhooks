@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0
+
+- The default transport is now `httpTransport()`, on `node:http`. It refuses private, loopback, link-local and reserved addresses after DNS resolution, so endpoint URLs cannot reach the internal network. `allowPrivateNetworks: true` turns this off. Blocked requests are dead-lettered with the error `blocked-address`. See ADR 0008.
+- `Endpoint.rateLimit` (requests per second) and `Endpoint.maxConcurrency` (requests in flight), per dispatcher. Both can be set in the dashboard, together with the timeout.
+- `isPrivateAddress()` and `BlockedAddressError` are exported.
+
 ## 0.2.0
 
 - Dashboard: endpoints (create, edit, pause, delete), secret rotation, health per endpoint, deliveries with every attempt and the body, redelivery, test events and publishing. Built with React and shadcn/ui, compiled into the package and served by `createDashboard()`, a plain `node:http` handler. Optional bearer token. See ADR 0007.

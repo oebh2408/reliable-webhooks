@@ -20,6 +20,13 @@ export interface Endpoint {
   headers?: Record<string, string>;
   /** Overrides the dispatcher's request timeout for this endpoint. */
   timeoutMs?: number;
+  /**
+   * Requests per second this endpoint accepts. Deliveries beyond it wait,
+   * without using up attempts. Enforced per dispatcher. Unset means no limit.
+   */
+  rateLimit?: number;
+  /** Requests in flight to this endpoint at once, per dispatcher. Default 1, at most 50. */
+  maxConcurrency?: number;
 }
 
 /** An event to publish. The body is serialized once and never changes. */
