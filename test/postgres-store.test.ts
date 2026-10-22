@@ -1,7 +1,7 @@
 import { PGlite } from "@electric-sql/pglite";
 import { describe, expect, it } from "vitest";
 import { runScenario, type Delivery } from "reliable-webhooks";
-import { PostgresDeliveryStore, PostgresIdempotencyStore, SCHEMA, type SqlClient } from "../examples/postgres-store.js";
+import { PostgresDeliveryStore, PostgresEndpointStore, PostgresIdempotencyStore, SCHEMA, type SqlClient } from "../examples/postgres-store.js";
 
 // PGlite is PostgreSQL compiled to WebAssembly: the real SQL engine, without a server.
 async function database(): Promise<SqlClient> {
@@ -48,5 +48,29 @@ describe("PostgreSQL stores (example)", () => {
     expect(await store.claim("msg_1", 1_000, 1_000)).toBe("claimed");
     await store.complete("msg_1", 1_000, 60_000);
     expect(await store.claim("msg_1", 2_000, 1_000)).toBe("duplicate");
+  });
+
+  it("count deliveries and list them newest first", async () => {
+    const store = new PostgresDeliveryStore(await database());
+    const base = { eventType: "a", body: "{}", status: "pending" as const, attempts: 0, history: [], version: 0 };
+    await store.insert([
+      { ...base, id: "m1:a", messageId: "m1", endpointId: "a", createdAt: 1, cycleStartedAt: 1, nextAttemptAt: 1 },
+      { ...base, id: "m2:a", messageId: "m2", endpointId: "a", createdAt: 2, cycleStartedAt: 2, nextAttemptAt: 2 },
+      { ...base, id: "m2:b", messageId: "m2", endpointId: "b", createdAt: 2, cycleStartedAt: 2, nextAttemptAt: 2 },
+    ]);
+    expect((await store.counts()).sort((x, y) => x.endpointId.localeCompare(y.endpointId))).toEqual([
+      { endpointId: "a", status: "pending", count: 2 },
+      { endpointId: "b", status: "pending", count: 1 },
+    ]);
+    expect((await store.list({ endpointId: "a", order: "desc" })).map((d) => d.id)).toEqual(["m2:a", "m1:a"]);
+  });
+
+  it("store endpoints", async () => {
+    const store = new PostgresEndpointStore(await database());
+    await store.save({ id: "crm", url: "https://crm.example.com", secrets: ["s1"] });
+    await store.save({ id: "crm", url: "https://crm.example.com", secrets: ["s2", "s1"], paused: true });
+    expect(await store.list()).toEqual([{ id: "crm", url: "https://crm.example.com", secrets: ["s2", "s1"], paused: true }]);
+    expect(await store.delete("crm")).toBe(true);
+    expect(await store.get("crm")).toBeUndefined();
   });
 });

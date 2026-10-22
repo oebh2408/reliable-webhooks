@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { fetchTransport } from "./http.js";
 import { classify, defaultRetryPolicy, parseRetryAfter, retryDelay, type Outcome, type RetryPolicy } from "./retry.js";
 import { signWebhook } from "./signature.js";
+import type { EndpointStore } from "./endpoints.js";
 import type { DeliveryQuery, DeliveryStore } from "./store.js";
 import type { Attempt, DeadReason, Delivery, Endpoint, EndpointState, Transport, WebhookEvent } from "./types.js";
 
@@ -18,7 +19,8 @@ export const defaultBreaker: BreakerOptions = { failureThreshold: 5, cooldownMs:
 
 export interface DispatcherOptions {
   store: DeliveryStore;
-  endpoints: Endpoint[];
+  /** A fixed list, or an {@link EndpointStore} that is read on every publish and tick. */
+  endpoints: Endpoint[] | EndpointStore;
   /** Sends the requests. Defaults to {@link fetchTransport}. */
   transport?: Transport;
   retry?: Partial<RetryPolicy>;
@@ -54,7 +56,7 @@ export interface TickReport {
   delivered: number;
   retried: number;
   dead: number;
-  /** Deliveries pushed back because the endpoint's breaker was open. */
+  /** Deliveries pushed back because the endpoint's breaker was open or the endpoint is paused. */
   postponed: number;
   /** Deliveries another worker changed first. */
   conflicts: number;
@@ -75,8 +77,8 @@ export interface PublishResult {
  * dispatchers may share one store. Delivery is at least once, see ADR 0003.
  */
 export class WebhookDispatcher {
-  private endpoints = new Map<string, Endpoint>();
-  private readonly store: DeliveryStore;
+  private endpoints: Endpoint[] | EndpointStore = [];
+  readonly store: DeliveryStore;
   private readonly transport: Transport;
   private readonly retry: RetryPolicy;
   private readonly breaker: BreakerOptions | undefined;
@@ -88,6 +90,8 @@ export class WebhookDispatcher {
   private readonly userAgent: string;
   private readonly attemptListeners: ((e: AttemptEvent) => void)[] = [];
   private readonly deadListeners: ((d: Delivery) => void)[] = [];
+  /** Endpoints this dispatcher is sending to right now, so overlapping ticks leave them alone. */
+  private readonly draining = new Set<string>();
 
   constructor(options: DispatcherOptions) {
     this.store = options.store;
@@ -104,9 +108,14 @@ export class WebhookDispatcher {
     if (this.leaseMs <= this.timeoutMs) throw new Error("leaseMs must be longer than timeoutMs");
   }
 
-  /** Replaces the endpoint list. Deliveries to removed endpoints are dead-lettered when they come due. */
-  setEndpoints(endpoints: Endpoint[]): void {
-    this.endpoints = new Map(endpoints.map((e) => [e.id, e]));
+  /** Replaces the endpoints. Deliveries to removed endpoints are dead-lettered when they come due. */
+  setEndpoints(endpoints: Endpoint[] | EndpointStore): void {
+    this.endpoints = endpoints;
+  }
+
+  /** The current endpoints, read from the store if there is one. */
+  async listEndpoints(): Promise<Endpoint[]> {
+    return Array.isArray(this.endpoints) ? [...this.endpoints] : this.endpoints.list();
   }
 
   /** Called after every attempt. Listener errors are ignored. */
@@ -139,8 +148,10 @@ export class WebhookDispatcher {
     const messageId = event.id ?? this.newId();
     const body = JSON.stringify({ type: event.type, timestamp: new Date(now).toISOString(), data: event.payload });
     const deliveries: Delivery[] = [];
-    for (const endpoint of this.endpoints.values()) {
-      if (endpoint.eventTypes && !endpoint.eventTypes.includes(event.type)) continue;
+    for (const endpoint of await this.listEndpoints()) {
+      if (event.endpointIds) {
+        if (!event.endpointIds.includes(endpoint.id)) continue;
+      } else if (endpoint.eventTypes && !endpoint.eventTypes.includes(event.type)) continue;
       if ((await this.store.getEndpointState(endpoint.id))?.disabled) continue;
       deliveries.push({
         id: `${messageId}:${endpoint.id}`,
@@ -162,29 +173,40 @@ export class WebhookDispatcher {
 
   /**
    * Sends what is due. Deliveries to the same endpoint go one after another;
-   * different endpoints run in parallel. Pass `now` to drive a simulated
-   * clock; without it the real clock is read at each step.
+   * different endpoints run in parallel. Ticks may overlap: an endpoint that
+   * a previous tick is still sending to (a slow one) is skipped, so it does
+   * not hold up the others. Pass `now` to drive a simulated clock; without it
+   * the real clock is read at each step.
    */
   async tick(now?: number, limit = 100): Promise<TickReport> {
     const clock = () => now ?? Date.now();
     const report: TickReport = { attempted: 0, delivered: 0, retried: 0, dead: 0, postponed: 0, conflicts: 0 };
     const due = await this.store.due(clock(), limit);
     const byEndpoint = new Map<string, Delivery[]>();
-    for (const d of due) byEndpoint.set(d.endpointId, [...(byEndpoint.get(d.endpointId) ?? []), d]);
-    await Promise.all([...byEndpoint].map(([endpointId, list]) => this.drainEndpoint(endpointId, list, clock, report)));
+    for (const d of due) {
+      if (this.draining.has(d.endpointId)) continue;
+      byEndpoint.set(d.endpointId, [...(byEndpoint.get(d.endpointId) ?? []), d]);
+    }
+    const endpoints = due.length ? new Map((await this.listEndpoints()).map((e) => [e.id, e])) : new Map<string, Endpoint>();
+    await Promise.all(
+      [...byEndpoint].map(async ([endpointId, list]) => {
+        this.draining.add(endpointId);
+        try {
+          await this.drainEndpoint(endpoints.get(endpointId), endpointId, list, clock, report);
+        } finally {
+          this.draining.delete(endpointId);
+        }
+      }),
+    );
     return report;
   }
 
-  /** Calls `tick()` every `intervalMs` without overlapping runs. Returns a function that stops it. */
+  /**
+   * Calls `tick()` every `intervalMs`. A slow endpoint keeps its own tick
+   * busy without delaying the others. Returns a function that stops it.
+   */
   start(intervalMs = 1_000): () => void {
-    let running = false;
-    const timer = setInterval(() => {
-      if (running) return;
-      running = true;
-      this.tick()
-        .catch(() => undefined)
-        .finally(() => (running = false));
-    }, intervalMs);
+    const timer = setInterval(() => void this.tick().catch(() => undefined), intervalMs);
     return () => clearInterval(timer);
   }
 
@@ -223,8 +245,13 @@ export class WebhookDispatcher {
     await this.store.saveEndpointState({ ...emptyState(endpointId), disabled: false });
   }
 
-  private async drainEndpoint(endpointId: string, list: Delivery[], clock: () => number, report: TickReport): Promise<void> {
-    const endpoint = this.endpoints.get(endpointId);
+  private async drainEndpoint(
+    endpoint: Endpoint | undefined,
+    endpointId: string,
+    list: Delivery[],
+    clock: () => number,
+    report: TickReport,
+  ): Promise<void> {
     const before = (await this.store.getEndpointState(endpointId)) ?? emptyState(endpointId);
     const state = { ...before };
 
@@ -238,8 +265,9 @@ export class WebhookDispatcher {
         await this.finish(delivery, delivery.version, { status: "dead", deadAt: now, deadReason: "expired" }, report);
         continue;
       }
-      if (state.openUntil > now) {
-        const ok = await this.store.update({ ...delivery, status: "pending", nextAttemptAt: state.openUntil }, delivery.version);
+      if (state.openUntil > now || endpoint.paused) {
+        const until = endpoint.paused ? now + PAUSE_RECHECK_MS : state.openUntil;
+        const ok = await this.store.update({ ...delivery, status: "pending", nextAttemptAt: until }, delivery.version);
         if (ok) report.postponed++;
         else report.conflicts++;
         continue;
@@ -345,6 +373,9 @@ export class WebhookDispatcher {
   }
 }
 
+/** How often deliveries to a paused endpoint are looked at again. */
+const PAUSE_RECHECK_MS = 10_000;
+
 function dead(delivery: Delivery, at: number, reason: DeadReason): Delivery {
   return { ...delivery, status: "dead", deadAt: at, deadReason: reason };
 }
@@ -356,7 +387,10 @@ function emptyState(endpointId: string): EndpointState {
 function describe(err: unknown): string {
   const e = err as { name?: string; code?: string; cause?: { code?: string } };
   if (e?.name === "TimeoutError" || e?.name === "AbortError") return "timeout";
-  return e?.cause?.code ?? e?.code ?? e?.name ?? "network";
+  const code = e?.cause?.code ?? e?.code;
+  // fetch reports a connection closed by the server as an undici socket error.
+  if (code === "UND_ERR_SOCKET") return "ECONNRESET";
+  return code ?? e?.name ?? "network";
 }
 
 function safely(f: () => void): void {

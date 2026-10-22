@@ -2,6 +2,13 @@
 export interface Endpoint {
   id: string;
   url: string;
+  /** Free text shown in the dashboard. */
+  description?: string;
+  /**
+   * While paused, deliveries are kept and postponed without using up
+   * attempts. `maxAgeMs` still applies.
+   */
+  paused?: boolean;
   /**
    * Signing secrets, newest first. Every secret signs every request, so a
    * receiver can rotate by adding the new secret before removing the old one.
@@ -21,6 +28,8 @@ export interface WebhookEvent {
   payload: unknown;
   /** Message id sent as `webhook-id`. Generated when omitted. Reusing an id makes publishing idempotent. */
   id?: string;
+  /** Send only to these endpoints, whatever event types they subscribe to. For test events. */
+  endpointIds?: string[];
 }
 
 export type DeliveryStatus = "pending" | "sending" | "delivered" | "dead";

@@ -7,7 +7,13 @@ export type { HeaderBag, SignedHeaders, VerificationFailure, VerifyOptions } fro
 export { classify, retryDelay, parseRetryAfter, defaultRetryPolicy } from "./retry.js";
 export type { Outcome, RetryPolicy } from "./retry.js";
 export { MemoryDeliveryStore } from "./store.js";
-export type { DeliveryQuery, DeliveryStore } from "./store.js";
+export type { DeliveryCount, DeliveryQuery, DeliveryStore } from "./store.js";
+export { MemoryEndpointStore } from "./endpoints.js";
+export type { EndpointStore } from "./endpoints.js";
+export { createDashboard } from "./dashboard.js";
+export type { DashboardOptions } from "./dashboard.js";
+export { startPlayground } from "./playground.js";
+export type { Playground, PlaygroundOptions } from "./playground.js";
 export { fetchTransport, nodeHandler, readBody } from "./http.js";
 export { runScenario, seededRandom } from "./simulator.js";
 export type { AttemptLogEntry, EndpointSummary, ScenarioOptions, ScenarioResult, SimulatedEndpoint } from "./simulator.js";

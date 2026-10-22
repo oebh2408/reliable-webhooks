@@ -1,9 +1,12 @@
 import type {
   ClaimResult,
   Delivery,
+  DeliveryCount,
   DeliveryQuery,
   DeliveryStore,
+  Endpoint,
   EndpointState,
+  EndpointStore,
   IdempotencyStore,
 } from "reliable-webhooks";
 
@@ -25,6 +28,11 @@ export const SCHEMA = `
   );
   CREATE INDEX IF NOT EXISTS webhook_deliveries_due ON webhook_deliveries (status, next_attempt_at);
   CREATE INDEX IF NOT EXISTS webhook_deliveries_endpoint ON webhook_deliveries (endpoint_id, status);
+
+  CREATE TABLE IF NOT EXISTS webhook_endpoints (
+    id   TEXT PRIMARY KEY,
+    data JSONB NOT NULL
+  );
 
   CREATE TABLE IF NOT EXISTS webhook_endpoint_state (
     endpoint_id TEXT PRIMARY KEY,
@@ -108,10 +116,17 @@ export class PostgresDeliveryStore implements DeliveryStore {
     params.push(query.limit ?? 1000);
     const { rows } = await this.db.query(
       `SELECT data, version FROM webhook_deliveries ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
-       ORDER BY created_at, id LIMIT $${params.length}`,
+       ORDER BY created_at ${query.order === "desc" ? "DESC" : "ASC"}, id LIMIT $${params.length}`,
       params,
     );
     return rows.map(parse);
+  }
+
+  async counts(): Promise<DeliveryCount[]> {
+    const { rows } = await this.db.query(
+      "SELECT endpoint_id, status, COUNT(*) AS count FROM webhook_deliveries GROUP BY endpoint_id, status",
+    );
+    return rows.map((r) => ({ endpointId: r.endpoint_id, status: r.status, count: Number(r.count) }));
   }
 
   async getEndpointState(endpointId: string): Promise<EndpointState | undefined> {
@@ -163,5 +178,33 @@ export class PostgresIdempotencyStore implements IdempotencyStore {
 
   async release(id: string): Promise<void> {
     await this.db.query("DELETE FROM webhook_received WHERE scope = $1 AND message_id = $2", [this.scope, id]);
+  }
+}
+
+/** Endpoint configuration, for a dispatcher and dashboard that manage endpoints at runtime. */
+export class PostgresEndpointStore implements EndpointStore {
+  constructor(private readonly db: SqlClient) {}
+
+  async list(): Promise<Endpoint[]> {
+    const { rows } = await this.db.query("SELECT data FROM webhook_endpoints ORDER BY id");
+    return rows.map((r) => (typeof r.data === "string" ? JSON.parse(r.data) : r.data));
+  }
+
+  async get(id: string): Promise<Endpoint | undefined> {
+    const { rows } = await this.db.query("SELECT data FROM webhook_endpoints WHERE id = $1", [id]);
+    if (!rows.length) return undefined;
+    return typeof rows[0].data === "string" ? JSON.parse(rows[0].data) : rows[0].data;
+  }
+
+  async save(endpoint: Endpoint): Promise<void> {
+    await this.db.query(
+      "INSERT INTO webhook_endpoints (id, data) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data",
+      [endpoint.id, JSON.stringify(endpoint)],
+    );
+  }
+
+  async delete(id: string): Promise<boolean> {
+    const { rowCount } = await this.db.query("DELETE FROM webhook_endpoints WHERE id = $1", [id]);
+    return rowCount === 1;
   }
 }

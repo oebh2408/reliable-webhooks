@@ -5,6 +5,14 @@ export interface DeliveryQuery {
   endpointId?: string;
   messageId?: string;
   limit?: number;
+  /** By creation time. Default `"asc"`. */
+  order?: "asc" | "desc";
+}
+
+export interface DeliveryCount {
+  endpointId: string;
+  status: DeliveryStatus;
+  count: number;
 }
 
 /**
@@ -31,6 +39,8 @@ export interface DeliveryStore {
    */
   update(delivery: Delivery, expectedVersion: number): Promise<boolean>;
   list(query: DeliveryQuery): Promise<Delivery[]>;
+  /** Number of deliveries per endpoint and status. */
+  counts(): Promise<DeliveryCount[]>;
   getEndpointState(endpointId: string): Promise<EndpointState | undefined>;
   /** Last write wins. Breaker counters are advisory, see ADR 0004. */
   saveEndpointState(state: EndpointState): Promise<void>;
@@ -89,9 +99,21 @@ export class MemoryDeliveryStore implements DeliveryStore {
       .filter((d) => !query.status || d.status === query.status)
       .filter((d) => !query.endpointId || d.endpointId === query.endpointId)
       .filter((d) => !query.messageId || d.messageId === query.messageId)
-      .sort((a, b) => a.createdAt - b.createdAt)
+      .sort((a, b) => (query.order === "desc" ? -1 : 1) * (a.createdAt - b.createdAt || a.id.localeCompare(b.id)))
       .slice(0, query.limit ?? Infinity)
       .map(copy);
+  }
+
+  async counts(): Promise<DeliveryCount[]> {
+    await tick();
+    const counts = new Map<string, DeliveryCount>();
+    for (const d of this.rows.values()) {
+      const key = `${d.endpointId}\u0000${d.status}`;
+      const c = counts.get(key) ?? { endpointId: d.endpointId, status: d.status, count: 0 };
+      c.count++;
+      counts.set(key, c);
+    }
+    return [...counts.values()];
   }
 
   async getEndpointState(endpointId: string): Promise<EndpointState | undefined> {

@@ -6,7 +6,7 @@
 
 Sending a webhook is one HTTP request. Sending it reliably means handling what happens around that request: the endpoint is down for twenty minutes, it rate-limits you, the response is lost after the receiver already processed the message, a secret is misconfigured and every request fails with 401, or the process that was sending crashes halfway.
 
-This library handles both sides. The sender keeps an outbox, retries with backoff, stops hammering endpoints that are down and moves permanent failures to a dead-letter list that can be redelivered. The receiver verifies signatures and runs each message once even when it arrives several times. It has no runtime dependencies, works in a long-running worker or in serverless functions, and includes a simulator so it can be tried without any external service.
+This library handles both sides. The sender keeps an outbox, retries with backoff, stops hammering endpoints that are down and moves permanent failures to a dead-letter list that can be redelivered. The receiver verifies signatures and runs each message once even when it arrives several times. A dashboard to manage endpoints and inspect deliveries is included. It has no runtime dependencies, works in a long-running worker or in serverless functions, and includes a simulator so it can be tried without any external service.
 
 <img src="docs/demo.svg" alt="Terminal demo: 120 messages to 5 misbehaving endpoints, every delivery handled exactly once" width="100%">
 
@@ -19,12 +19,49 @@ This library handles both sides. The sender keeps an outbox, retries with backof
 | Endpoint returns 5xx or times out | Message lost | Retried with exponential backoff and jitter, 8 attempts over about 11 hours |
 | Endpoint rate-limits with 429 | Retries make it worse | `Retry-After` is honoured |
 | Endpoint is down for a while | Every queued message keeps failing on its own schedule | Circuit breaker per endpoint: deliveries wait without using up attempts, one probe at a time |
+| One endpoint is slow | Every other endpoint waits behind it | Endpoints are sent to in parallel; a slow one only holds up itself |
 | Response lost after the receiver processed the message | Sender retries and the receiver processes it twice | Receiver deduplicates by message id |
 | Endpoint answers 4xx (wrong secret, bad route) | Retrying for days, or silent loss | Dead letter right away, with the attempt history; redeliver after the fix |
 | Endpoint answers 410 Gone | Keeps receiving traffic | Endpoint is disabled |
 | Sending process crashes mid-request | Delivery stuck or lost | Lease expires and another worker takes it over |
 | Webhook published, then the transaction rolls back | Webhook for something that never happened | `prepare()` lets you write the delivery in the same transaction |
 | Forged or replayed request | Receiver acts on it | HMAC signature over id, timestamp and body; timestamps older than 5 minutes rejected |
+
+## Dashboard
+
+<img src="docs/dashboard.png" alt="Dashboard overview: delivery totals, endpoint health with an open circuit breaker and dead letters, recent deliveries" width="100%">
+
+To try it with simulated receivers, in a clone of this repository:
+
+```bash
+npm install
+npm run dashboard        # http://127.0.0.1:4000
+```
+
+The playground starts five local receivers with different failures (one drops connections while you switch it off, one answers 503 at random, one is slow, one has a stale secret) and publishes random events. From the sidebar you can take the failing receiver down, fix the stale secret and then redeliver its dead letters from the endpoint page.
+
+What it does:
+
+- Endpoints: add, edit URL and event types, pause and resume, delete. A signing secret is generated for each new endpoint.
+- Secrets: reveal and copy, add a new one for rotation (both are used for signing until the old one is removed).
+- Health per endpoint: delivered, waiting and dead counts, last response, open circuit breaker, endpoints disabled by a 410.
+- Deliveries: filter by status, endpoint or message; open one to see the body and every attempt with status, error and duration.
+- Redeliver one dead letter or all of an endpoint's, send a test event to one endpoint, or publish any event.
+
+In your own application, mount it on a port that is not public, with a token:
+
+```ts
+import { createServer } from "node:http";
+import { createDashboard, WebhookDispatcher } from "reliable-webhooks";
+import { PostgresDeliveryStore, PostgresEndpointStore } from "./postgres-store.js";   // see examples/
+
+const endpoints = new PostgresEndpointStore(pool);
+const dispatcher = new WebhookDispatcher({ store: new PostgresDeliveryStore(pool), endpoints });
+
+createServer(createDashboard({ dispatcher, endpoints, token: process.env.DASHBOARD_TOKEN })).listen(4000, "127.0.0.1");
+```
+
+When the dispatcher gets its endpoints from an `EndpointStore`, it reads them on every publish and tick, so changes made in the dashboard apply to every worker without a restart. The page is a React app built with shadcn/ui and compiled into the package; at runtime it is served by a plain `node:http` handler, so the library still has no dependencies. Design notes and the security model in [ADR 0007](docs/adr/0007-dashboard.md).
 
 ## Install
 
@@ -123,9 +160,9 @@ To verify without the idempotency layer, `verifyWebhook({ headers, body, secrets
 
 ## Running with a database
 
-In production the store should be a database shared by every process that publishes or sends. A store implements seven methods, the important one being a conditional update on a version number. Any database with a conditional write works.
+In production the store should be a database shared by every process that publishes or sends. A store implements eight methods, the important one being a conditional update on a version number. Any database with a conditional write works.
 
-[examples/postgres-store.ts](examples/postgres-store.ts) has a PostgreSQL implementation of both stores (deliveries and received ids). Its tests run the full simulator against a real PostgreSQL engine compiled to WebAssembly (PGlite).
+[examples/postgres-store.ts](examples/postgres-store.ts) has a PostgreSQL implementation of the three stores (deliveries, endpoints and received ids). Its tests run the full simulator against a real PostgreSQL engine compiled to WebAssembly (PGlite).
 
 ```
 API / functions ── publish() ──►  webhook_deliveries  ◄── tick() ── worker or scheduled function ──► endpoints
@@ -174,25 +211,28 @@ With the circuit breaker on, the analytics endpoint receives 10 requests during 
 - Endpoint URLs are not validated. If endpoints come from users, check them before registering, so they cannot point at internal addresses.
 - Cleanup of delivered rows. Delete them on your own schedule.
 - Payload size limits, and per-endpoint concurrency above one request at a time per worker.
+- Users, roles and an audit log in the dashboard. It has one shared token; put it behind your own authentication if you need more.
 
 ## API
 
 | Member | Description |
 | --- | --- |
-| `new WebhookDispatcher(options)` | `store`, `endpoints`, `transport`, `retry`, `breaker`, `timeoutMs`, `leaseMs`, `historyLimit`, `random`, `newId` |
-| `publish(event, now?)` | Stores one delivery per subscribed endpoint; idempotent on `event.id` |
+| `new WebhookDispatcher(options)` | `store`, `endpoints` (array or `EndpointStore`), `transport`, `retry`, `breaker`, `timeoutMs`, `leaseMs`, `historyLimit`, `random`, `newId` |
+| `publish(event, now?)` | Stores one delivery per subscribed endpoint (or per `event.endpointIds`); idempotent on `event.id` |
 | `prepare(event, now?)` | Builds the deliveries without storing them |
 | `tick(now?, limit?)` | Sends what is due; returns counts of attempted, delivered, retried, dead, postponed |
 | `start(intervalMs?)` | Calls `tick()` on a timer; returns a stop function |
 | `deadLetters(query?)` / `redeliver(query?, now?)` | List and requeue dead deliveries |
 | `enableEndpoint(id)` | Re-enables an endpoint disabled by a 410 |
-| `setEndpoints(endpoints)` | Replaces the endpoint list |
+| `setEndpoints(endpoints)` / `listEndpoints()` | Replaces / reads the endpoints (an array or an `EndpointStore`) |
 | `onAttempt(listener)` / `onDead(listener)` | Called after each attempt / each dead letter |
 | `new WebhookReceiver(options)` | `secrets`, `toleranceMs`, `store`, `leaseMs`, `retainMs` |
 | `handle({ headers, body }, handler, now?)` | Verifies, deduplicates, runs the handler; returns `{ status, outcome }` |
 | `nodeHandler(receiver, handler)` | `node:http` / Express handler |
 | `signWebhook` / `verifyWebhook` / `generateSecret` | Signatures |
-| `MemoryDeliveryStore` / `MemoryIdempotencyStore` | Reference stores |
+| `MemoryDeliveryStore` / `MemoryEndpointStore` / `MemoryIdempotencyStore` | Reference stores |
+| `createDashboard({ dispatcher, endpoints, token? })` | `node:http` handler for the dashboard page and its API |
+| `startPlayground(options?)` | The dashboard with simulated receivers, as in `npm run dashboard` |
 | `fetchTransport()` | The default transport, on global `fetch` |
 | `runScenario(options?)` | The simulator |
 
@@ -204,6 +244,7 @@ With the circuit breaker on, the analytics endpoint receives 10 requests during 
 - [0004 · A circuit breaker per endpoint](docs/adr/0004-circuit-breaker-per-endpoint.md)
 - [0005 · The outbox: a store with leases and conditional updates](docs/adr/0005-outbox-store-with-leases.md)
 - [0006 · An explicit clock](docs/adr/0006-explicit-clock.md)
+- [0007 · A dashboard served by the library](docs/adr/0007-dashboard.md)
 
 ## Development
 
@@ -211,7 +252,9 @@ With the circuit breaker on, the analytics endpoint receives 10 requests during 
 npm install
 npm test           # unit tests, real HTTP, PostgreSQL (PGlite) and the simulator's exactly-once check
 npm run demo
-npm run demo:svg   # re-renders docs/demo.svg from the real demo output
+npm run demo:svg       # re-renders docs/demo.svg from the real demo output
+npm run dashboard      # builds and starts the playground on :4000
+npm run dev:dashboard  # Vite dev server for the page, with the API proxied to :4000
 ```
 
 ## License
