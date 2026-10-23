@@ -29,6 +29,15 @@ export const SCHEMA = `
   CREATE INDEX IF NOT EXISTS webhook_deliveries_due ON webhook_deliveries (status, next_attempt_at);
   CREATE INDEX IF NOT EXISTS webhook_deliveries_endpoint ON webhook_deliveries (endpoint_id, status);
 
+  -- Added in 0.4.0: ordering keys and purging finished rows.
+  ALTER TABLE webhook_deliveries ADD COLUMN IF NOT EXISTS ordering_key TEXT;
+  ALTER TABLE webhook_deliveries ADD COLUMN IF NOT EXISTS sequence BIGINT;
+  ALTER TABLE webhook_deliveries ADD COLUMN IF NOT EXISTS finished_at BIGINT;
+  CREATE INDEX IF NOT EXISTS webhook_deliveries_ordering ON webhook_deliveries (endpoint_id, ordering_key, sequence)
+    WHERE ordering_key IS NOT NULL AND status IN ('pending', 'sending');
+  CREATE INDEX IF NOT EXISTS webhook_deliveries_finished ON webhook_deliveries (status, finished_at)
+    WHERE finished_at IS NOT NULL;
+
   CREATE TABLE IF NOT EXISTS webhook_endpoints (
     id   TEXT PRIMARY KEY,
     data JSONB NOT NULL
@@ -68,9 +77,20 @@ export class PostgresDeliveryStore implements DeliveryStore {
     let inserted = 0;
     for (const d of deliveries) {
       const { rows } = await this.db.query(
-        `INSERT INTO webhook_deliveries (id, message_id, endpoint_id, status, next_attempt_at, created_at, version, data)
-         VALUES ($1, $2, $3, $4, $5, $6, 1, $7) ON CONFLICT (id) DO NOTHING RETURNING id`,
-        [d.id, d.messageId, d.endpointId, d.status, d.nextAttemptAt, d.createdAt, JSON.stringify({ ...d, version: undefined })],
+        `INSERT INTO webhook_deliveries
+           (id, message_id, endpoint_id, status, next_attempt_at, created_at, ordering_key, sequence, version, data)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9) ON CONFLICT (id) DO NOTHING RETURNING id`,
+        [
+          d.id,
+          d.messageId,
+          d.endpointId,
+          d.status,
+          d.nextAttemptAt,
+          d.createdAt,
+          d.orderingKey ?? null,
+          d.sequence ?? null,
+          JSON.stringify({ ...d, version: undefined }),
+        ],
       );
       inserted += rows.length;
     }
@@ -94,9 +114,9 @@ export class PostgresDeliveryStore implements DeliveryStore {
 
   async update(d: Delivery, expectedVersion: number): Promise<boolean> {
     const { rowCount } = await this.db.query(
-      `UPDATE webhook_deliveries SET status = $1, next_attempt_at = $2, version = version + 1, data = $3
-       WHERE id = $4 AND version = $5`,
-      [d.status, d.nextAttemptAt, JSON.stringify({ ...d, version: undefined }), d.id, expectedVersion],
+      `UPDATE webhook_deliveries SET status = $1, next_attempt_at = $2, finished_at = $3, version = version + 1, data = $4
+       WHERE id = $5 AND version = $6`,
+      [d.status, d.nextAttemptAt, d.deliveredAt ?? d.deadAt ?? null, JSON.stringify({ ...d, version: undefined }), d.id, expectedVersion],
     );
     return rowCount === 1;
   }
@@ -120,6 +140,26 @@ export class PostgresDeliveryStore implements DeliveryStore {
       params,
     );
     return rows.map(parse);
+  }
+
+  async head(endpointId: string, orderingKey: string): Promise<Delivery | undefined> {
+    const { rows } = await this.db.query(
+      `SELECT data, version FROM webhook_deliveries
+       WHERE endpoint_id = $1 AND ordering_key = $2 AND status IN ('pending', 'sending')
+       ORDER BY sequence LIMIT 1`,
+      [endpointId, orderingKey],
+    );
+    return rows.length ? parse(rows[0]) : undefined;
+  }
+
+  async purge(status: "delivered" | "dead", before: number, limit: number): Promise<number> {
+    const { rowCount } = await this.db.query(
+      `DELETE FROM webhook_deliveries WHERE id IN (
+         SELECT id FROM webhook_deliveries WHERE status = $1 AND finished_at < $2 LIMIT $3
+       )`,
+      [status, before, limit],
+    );
+    return rowCount ?? 0;
   }
 
   async counts(): Promise<DeliveryCount[]> {

@@ -3,7 +3,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { AttemptBadge, ErrorNote, HealthBadge, PageHeader, health } from "@/components/common";
 import { DeliveriesTable } from "@/components/deliveries";
 import { api } from "@/lib/api";
-import { relative } from "@/lib/format";
+import { duration, relative } from "@/lib/format";
 import { navigate, usePolling } from "@/lib/hooks";
 
 export function OverviewPage() {
@@ -38,7 +38,10 @@ export function OverviewPage() {
       <Card>
         <CardHeader>
           <CardTitle>Endpoints</CardTitle>
-          <CardDescription>Click one to change its settings or rotate its secret.</CardDescription>
+          <CardDescription>
+            Click one to change its settings or rotate its secret. Success and p95 cover the last 200 attempts by this process; Prometheus
+            metrics are at <code>api/metrics</code>.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <Table>
@@ -49,6 +52,8 @@ export function OverviewPage() {
                 <TableHead className="text-right">Delivered</TableHead>
                 <TableHead className="text-right">Waiting</TableHead>
                 <TableHead className="text-right">Dead</TableHead>
+                <TableHead className="hidden text-right md:table-cell">Success</TableHead>
+                <TableHead className="hidden text-right md:table-cell">p95</TableHead>
                 <TableHead>Last response</TableHead>
               </TableRow>
             </TableHeader>
@@ -67,6 +72,10 @@ export function OverviewPage() {
                   <TableCell className={e.counts.dead ? "text-right font-medium text-red-600 tabular-nums dark:text-red-400" : "text-right tabular-nums"}>
                     {e.counts.dead}
                   </TableCell>
+                  <TableCell className="hidden text-right tabular-nums md:table-cell">
+                    {e.metrics?.successRate == null ? "—" : `${Math.round(e.metrics.successRate * 100)}%`}
+                  </TableCell>
+                  <TableCell className="hidden text-right tabular-nums md:table-cell">{e.metrics?.p95Ms == null ? "—" : duration(e.metrics.p95Ms)}</TableCell>
                   <TableCell>
                     <AttemptBadge attempt={e.lastAttempt} />
                     {e.lastAttempt && <span className="text-muted-foreground ml-2 text-xs">{relative(e.lastAttempt.at, data.now)}</span>}

@@ -5,7 +5,7 @@ import { WebhookDispatcher } from "./dispatcher.js";
 import { MemoryEndpointStore } from "./endpoints.js";
 import { httpTransport, readBody } from "./http.js";
 import { MemoryIdempotencyStore, WebhookReceiver } from "./receiver.js";
-import { generateSecret } from "./signature.js";
+import { generateKeyPair, generateSecret, isSecretKey, publicKeyFor } from "./signature.js";
 import { MemoryDeliveryStore } from "./store.js";
 import type { Endpoint } from "./types.js";
 
@@ -43,7 +43,7 @@ export async function startPlayground(options: PlaygroundOptions = {}): Promise<
   const flags = { traffic: options.traffic ?? true, analyticsDown: false, legacyFixed: false };
   const receivers = new Map<string, LocalReceiver>();
   const behaviours: Record<string, string> = {
-    orders: "Healthy",
+    orders: "Healthy. Signs with an ed25519 key; events of one order arrive in order",
     crm: "20% of requests fail with 503",
     analytics: "Drops connections while it is down",
     partner: "Slow: 20% of requests take longer than the 2 s timeout",
@@ -71,7 +71,9 @@ export async function startPlayground(options: PlaygroundOptions = {}): Promise<
     if (endpointId === "analytics" && flags.analyticsDown) return void req.socket.destroy();
     if (endpointId === "crm" && Math.random() < 0.2) return void res.writeHead(503).end();
     if (endpointId === "partner" && Math.random() < 0.2) await new Promise((ok) => setTimeout(ok, 2_500));
-    const secrets = endpointId === "legacy" && !flags.legacyFixed ? [staleSecret] : (endpoint?.secrets ?? []);
+    // A receiver holds the HMAC secrets, and only the public key of an ed25519 one.
+    const current = (endpoint?.secrets ?? []).map((s) => (isSecretKey(s) ? publicKeyFor(s) : s));
+    const secrets = endpointId === "legacy" && !flags.legacyFixed ? [staleSecret] : current;
     const body = await readBody(req);
     const result = await new WebhookReceiver({ secrets, store: r.idempotency }).handle({ headers: req.headers, body }, () => {
       r.processed++;
@@ -86,7 +88,7 @@ export async function startPlayground(options: PlaygroundOptions = {}): Promise<
     const endpoint: Endpoint = {
       id,
       url: `${receiverUrl}/${id}`,
-      secrets: [generateSecret()],
+      secrets: [id === "orders" ? generateKeyPair().secretKey : generateSecret()],
       description: behaviours[id],
       eventTypes: id === "legacy" ? ["invoice.issued"] : id === "partner" ? ["order.paid", "order.shipped"] : undefined,
     };
@@ -103,6 +105,7 @@ export async function startPlayground(options: PlaygroundOptions = {}): Promise<
     // Shorter than the defaults, so that retries are visible while watching.
     retry: { baseDelayMs: 2_000, factor: 3, maxDelayMs: 10 * 60_000 },
     breaker: { failureThreshold: 4, cooldownMs: 15_000, maxCooldownMs: 2 * 60_000 },
+    retention: { deliveredMs: 30 * 60_000, deadMs: 2 * 60 * 60_000 },
   });
   const stopDispatcher = dispatcher.start(500);
 
@@ -110,7 +113,11 @@ export async function startPlayground(options: PlaygroundOptions = {}): Promise<
   const traffic = setInterval(() => {
     if (!flags.traffic) return;
     const type = EVENT_TYPES[Math.floor(Math.random() * EVENT_TYPES.length)]!;
-    void dispatcher.publish({ type, payload: { id: `${type.split(".")[0]}_${1000 + ++n}`, amount: Math.round(Math.random() * 50_000) / 100 } });
+    // Order events pick one of a few open orders, and keep their order per order id.
+    const orderId = `order_${1000 + Math.floor(Math.random() * 5)}`;
+    const id = type.startsWith("order.") ? orderId : `invoice_${1000 + ++n}`;
+    const orderingKey = type.startsWith("order.") ? orderId : undefined;
+    void dispatcher.publish({ type, payload: { id, amount: Math.round(Math.random() * 50_000) / 100 }, orderingKey });
   }, 1_500);
 
   const dashboard = createDashboard({ dispatcher, endpoints });

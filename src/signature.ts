@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, sign, timingSafeEqual, verify, type KeyObject } from "node:crypto";
 
 /**
  * Signatures follow the Standard Webhooks format (https://www.standardwebhooks.com),
@@ -9,6 +9,10 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
  *   webhook-signature: v1,<base64 HMAC-SHA256 of "id.timestamp.body">  [v1,<...> ...]
  *
  * Several signatures, separated by spaces, allow secret rotation.
+ *
+ * Secrets starting with `whsk_` are ed25519 private keys and sign with `v1a`
+ * instead; receivers verify those with the matching `whpk_` public key, so
+ * they never hold anything that can sign. See ADR 0010.
  */
 
 export type HeaderBag =
@@ -36,10 +40,53 @@ export class WebhookVerificationError extends Error {
 }
 
 const PREFIX = "whsec_";
+const PRIVATE_PREFIX = "whsk_";
+const PUBLIC_PREFIX = "whpk_";
+// DER headers that turn a raw 32-byte ed25519 key into PKCS#8 / SPKI.
+const PKCS8_ED25519 = Buffer.from("302e020100300506032b657004220420", "hex");
+const SPKI_ED25519 = Buffer.from("302a300506032b6570032100", "hex");
 
 /** A new random secret in the `whsec_<base64>` format. */
 export function generateSecret(bytes = 24): string {
   return PREFIX + randomBytes(bytes).toString("base64");
+}
+
+/**
+ * A new ed25519 key pair. `secretKey` (`whsk_` and the base64 32-byte seed)
+ * goes in the endpoint's `secrets`; `publicKey` (`whpk_` and the base64 raw
+ * 32-byte key) is what the receiver verifies with.
+ */
+export function generateKeyPair(): { secretKey: string; publicKey: string } {
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  const seed = privateKey.export({ format: "der", type: "pkcs8" }).subarray(PKCS8_ED25519.length);
+  return { secretKey: PRIVATE_PREFIX + seed.toString("base64"), publicKey: publicKeyOf(publicKey) };
+}
+
+/** The `whpk_` public key for a `whsk_` secret key. */
+export function publicKeyFor(secretKey: string): string {
+  return publicKeyOf(createPublicKey(privateKey(secretKey)));
+}
+
+export function isSecretKey(secret: string): boolean {
+  return secret.startsWith(PRIVATE_PREFIX);
+}
+
+function publicKeyOf(key: KeyObject): string {
+  return PUBLIC_PREFIX + key.export({ format: "der", type: "spki" }).subarray(SPKI_ED25519.length).toString("base64");
+}
+
+function rawKey(value: string, prefix: string): Buffer {
+  const raw = Buffer.from(value.slice(prefix.length), "base64");
+  if (raw.length !== 32) throw new Error(`${prefix} keys are 32 bytes, base64 encoded`);
+  return raw;
+}
+
+function privateKey(secretKey: string): KeyObject {
+  return createPrivateKey({ key: Buffer.concat([PKCS8_ED25519, rawKey(secretKey, PRIVATE_PREFIX)]), format: "der", type: "pkcs8" });
+}
+
+function publicKey(value: string): KeyObject {
+  return createPublicKey({ key: Buffer.concat([SPKI_ED25519, rawKey(value, PUBLIC_PREFIX)]), format: "der", type: "spki" });
 }
 
 function key(secret: string): Buffer {
@@ -56,7 +103,13 @@ export function signWebhook(input: { id: string; timestamp: number; body: string
   return {
     "webhook-id": input.id,
     "webhook-timestamp": String(input.timestamp),
-    "webhook-signature": input.secrets.map((s) => `v1,${hmac(s, input.id, input.timestamp, input.body)}`).join(" "),
+    "webhook-signature": input.secrets
+      .map((s) => {
+        if (!isSecretKey(s)) return `v1,${hmac(s, input.id, input.timestamp, input.body)}`;
+        const content = Buffer.from(`${input.id}.${input.timestamp}.${input.body}`);
+        return `v1a,${sign(null, content, privateKey(s)).toString("base64")}`;
+      })
+      .join(" "),
   };
 }
 
@@ -73,7 +126,7 @@ export interface VerifyOptions {
   headers: HeaderBag;
   /** The raw request body, exactly as received. Parsing and re-serializing breaks the signature. */
   body: string;
-  /** Accepted secrets. Any match is enough. */
+  /** Accepted `whsec_` secrets and `whpk_` public keys. Any match is enough. */
   secrets: string[];
   /** Current time in milliseconds. Defaults to `Date.now()`. */
   now?: number;
@@ -97,11 +150,17 @@ export function verifyWebhook(options: VerifyOptions): { id: string; timestamp: 
   if (timestamp * 1000 < now - toleranceMs) throw new WebhookVerificationError("timestamp-too-old");
   if (timestamp * 1000 > now + toleranceMs) throw new WebhookVerificationError("timestamp-too-new");
 
-  const candidates = signatures
-    .split(" ")
-    .filter((s) => s.startsWith("v1,"))
-    .map((s) => Buffer.from(s.slice(3), "base64"));
+  const parts = signatures.split(" ");
+  const candidates = parts.filter((s) => s.startsWith("v1,")).map((s) => Buffer.from(s.slice(3), "base64"));
+  const asymmetric = parts.filter((s) => s.startsWith("v1a,")).map((s) => Buffer.from(s.slice(4), "base64"));
   for (const secret of secrets) {
+    if (secret.startsWith(PUBLIC_PREFIX)) {
+      const content = Buffer.from(`${id}.${timestamp}.${body}`);
+      const key = publicKey(secret);
+      if (asymmetric.some((sig) => sig.length === 64 && verify(null, content, key, sig))) return { id, timestamp };
+      continue;
+    }
+    if (isSecretKey(secret)) throw new Error("verify with the whpk_ public key, not the whsk_ secret key");
     const expected = Buffer.from(hmac(secret, id, timestamp, body), "base64");
     if (candidates.some((c) => c.length === expected.length && timingSafeEqual(c, expected))) {
       return { id, timestamp };

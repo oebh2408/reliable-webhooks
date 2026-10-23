@@ -1,6 +1,6 @@
 import { PGlite } from "@electric-sql/pglite";
 import { describe, expect, it } from "vitest";
-import { runScenario, type Delivery } from "reliable-webhooks";
+import { generateSecret, runScenario, WebhookDispatcher, type Delivery } from "reliable-webhooks";
 import { PostgresDeliveryStore, PostgresEndpointStore, PostgresIdempotencyStore, SCHEMA, type SqlClient } from "../examples/postgres-store.js";
 
 // PGlite is PostgreSQL compiled to WebAssembly: the real SQL engine, without a server.
@@ -72,5 +72,29 @@ describe("PostgreSQL stores (example)", () => {
     expect(await store.list()).toEqual([{ id: "crm", url: "https://crm.example.com", secrets: ["s2", "s1"], paused: true }]);
     expect(await store.delete("crm")).toBe(true);
     expect(await store.get("crm")).toBeUndefined();
+  });
+
+  it("keep ordering keys in order and purge finished rows", async () => {
+    const store = new PostgresDeliveryStore(await database());
+    const seen: number[] = [];
+    let calls = 0;
+    const dispatcher = new WebhookDispatcher({
+      store,
+      endpoints: [{ id: "e", url: "https://e.example.test/", secrets: [generateSecret()], maxConcurrency: 3 }],
+      transport: async (req) => {
+        // The first request fails, so the next two events of the key wait for its retry.
+        if (++calls === 1) return { status: 503 };
+        seen.push(JSON.parse(req.body).data.i);
+        return { status: 200 };
+      },
+      random: () => 0,
+    });
+    for (let i = 0; i < 3; i++) await dispatcher.publish({ type: "a", payload: { i }, orderingKey: "k" }, 1_000);
+    await dispatcher.tick(1_000);
+    expect(seen).toEqual([]);
+    for (let t = 6_000; seen.length < 3 && t < 30_000; t += 1_000) await dispatcher.tick(t);
+    expect(seen).toEqual([0, 1, 2]);
+    expect(await dispatcher.purge({ deliveredMs: 0 }, 60_000)).toEqual({ delivered: 3, dead: 0 });
+    expect(await store.counts()).toEqual([]);
   });
 });

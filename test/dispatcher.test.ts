@@ -277,6 +277,76 @@ describe("dispatcher", () => {
     }
   });
 
+  it("keeps events with the same ordering key in order, without holding up other keys", async () => {
+    const seen: string[] = [];
+    const { store, dispatcher } = setup((req, n) => {
+      const { data } = JSON.parse(req.body);
+      seen.push(data.step);
+      return n === 1 ? { status: 503 } : { status: 200 };
+    });
+    await dispatcher.publish({ type: "order.created", payload: { step: "a1" }, orderingKey: "order-a" }, T0);
+    await dispatcher.publish({ type: "order.paid", payload: { step: "a2" }, orderingKey: "order-a" }, T0);
+    await dispatcher.publish({ type: "order.created", payload: { step: "b1" }, orderingKey: "order-b" }, T0);
+    expect(await dispatcher.tick(T0)).toMatchObject({ attempted: 2, retried: 1, postponed: 1 });
+    expect(seen).toEqual(["a1", "b1"]);
+    const retryAt = (await store.list({ status: "pending" })).map((d) => d.nextAttemptAt);
+    expect(new Set(retryAt).size).toBe(1);
+    await dispatcher.tick(retryAt[0]);
+    expect(seen).toEqual(["a1", "b1", "a1", "a2"]);
+    expect(dispatcher.metrics.snapshot()[0]!.postponed).toEqual({ ordering: 1 });
+  });
+
+  it("keeps order with concurrent requests to the endpoint", async () => {
+    const seen: number[] = [];
+    const { dispatcher } = setup(
+      async (req) => {
+        await new Promise((r) => setTimeout(r, 2));
+        seen.push(JSON.parse(req.body).data.i);
+        return { status: 200 };
+      },
+      { endpoints: [{ ...endpoint, maxConcurrency: 4 }] },
+    );
+    for (let i = 0; i < 6; i++) await dispatcher.publish({ type: "a", payload: { i }, orderingKey: "k" }, T0);
+    for (let t = T0; seen.length < 6 && t < T0 + 20_000; t += 1_000) await dispatcher.tick(t);
+    expect(seen).toEqual([0, 1, 2, 3, 4, 5]);
+  });
+
+  it("needs a store with head() for ordering keys and purge() for retention", async () => {
+    const store = Object.assign(new MemoryDeliveryStore(), { head: undefined, purge: undefined });
+    const dispatcher = new WebhookDispatcher({ store, endpoints: [endpoint] });
+    await expect(dispatcher.publish({ type: "a", payload: {}, orderingKey: "k" })).rejects.toThrow(/head\(\)/);
+    expect(() => new WebhookDispatcher({ store, endpoints: [endpoint], retention: { deliveredMs: 1 } })).toThrow(/purge\(\)/);
+  });
+
+  it("purges finished deliveries older than the retention, never pending ones", async () => {
+    const { store, dispatcher } = setup((req) => ({ status: JSON.parse(req.body).data.ok ? 200 : 400 }));
+    for (let i = 0; i < 5; i++) await dispatcher.publish({ type: "a", payload: { ok: i < 3 } }, T0);
+    await dispatcher.tick(T0);
+    await dispatcher.publish({ type: "a", payload: { ok: true } }, T0 + 1);
+    const day = 86_400_000;
+    expect(await dispatcher.purge({ deliveredMs: day, deadMs: 7 * day, batchSize: 2 }, T0 + 2 * day)).toEqual({ delivered: 3, dead: 0 });
+    expect(await dispatcher.purge({ deliveredMs: day, deadMs: 7 * day }, T0 + 8 * day)).toEqual({ delivered: 0, dead: 2 });
+    expect((await store.list({})).map((d) => d.status)).toEqual(["pending"]);
+  });
+
+  it("exposes counters in the Prometheus format", async () => {
+    const { dispatcher } = setup((_, n) => (n === 1 ? { status: 500, durationMs: 120 } : { status: 200, durationMs: 40 }));
+    await dispatcher.publish({ type: "a", payload: {} }, T0);
+    await dispatcher.tick(T0);
+    await dispatcher.tick(T0 + 60_000);
+    const text = await dispatcher.prometheus(T0 + 60_000);
+    expect(text).toContain('webhook_attempts_total{endpoint="shop",outcome="retry"} 1');
+    expect(text).toContain('webhook_attempts_total{endpoint="shop",outcome="success"} 1');
+    expect(text).toContain('webhook_attempt_duration_seconds_bucket{endpoint="shop",le="0.05"} 1');
+    expect(text).toContain('webhook_attempt_duration_seconds_bucket{endpoint="shop",le="+Inf"} 2');
+    expect(text).toContain('webhook_delivered_total{endpoint="shop"} 1');
+    expect(text).toContain('webhook_deliveries{endpoint="shop",status="delivered"} 1');
+    expect(text).toContain('webhook_breaker_open{endpoint="shop"} 0');
+    expect(dispatcher.metrics.snapshot()).toEqual([
+      expect.objectContaining({ endpointId: "shop", delivered: 1, successRate: 0.5, p50Ms: 120, p95Ms: 120 }),
+    ]);
+  });
+
   it("requires the lease to outlast the timeout", () => {
     expect(() => setup(ok, { timeoutMs: 60_000, leaseMs: 30_000 })).toThrow(/leaseMs/);
   });

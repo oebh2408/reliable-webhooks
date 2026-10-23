@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { generateSecret, signWebhook, verifyWebhook, WebhookVerificationError } from "reliable-webhooks";
+import { generateKeyPair, generateSecret, publicKeyFor, signWebhook, verifyWebhook, WebhookVerificationError } from "reliable-webhooks";
 
 // Test vector published with the Standard Webhooks reference libraries. It is public and
 // not a real secret; the prefix is joined at runtime so secret scanners do not flag it.
@@ -68,5 +68,27 @@ describe("signatures", () => {
     const upper = Object.fromEntries(Object.entries(signed).map(([k, v]) => [k.toUpperCase(), v]));
     expect(verifyWebhook({ headers: upper, body: "{}", secrets: [secret], now }).id).toBe("msg_1");
     expect(verifyWebhook({ headers: new Headers(signed), body: "{}", secrets: [secret], now }).id).toBe("msg_1");
+  });
+
+  it("signs with ed25519 keys (v1a), next to HMAC secrets", () => {
+    const pair = generateKeyPair();
+    const hmacSecret = generateSecret();
+    expect(pair.secretKey).toMatch(/^whsk_/);
+    expect(publicKeyFor(pair.secretKey)).toBe(pair.publicKey);
+    const now = 1_768_208_400_000;
+    const signed = signWebhook({ id: "msg_1", timestamp: now / 1000, body: "{}", secrets: [pair.secretKey, hmacSecret] });
+    expect(signed["webhook-signature"]).toMatch(/^v1a,\S{88} v1,\S{44}$/);
+    expect(verifyWebhook({ headers: signed, body: "{}", secrets: [pair.publicKey], now }).id).toBe("msg_1");
+    expect(verifyWebhook({ headers: signed, body: "{}", secrets: [hmacSecret], now }).id).toBe("msg_1");
+    expect(failure(() => verifyWebhook({ headers: signed, body: "{ }", secrets: [pair.publicKey], now }))).toBe("no-matching-signature");
+    expect(failure(() => verifyWebhook({ headers: signed, body: "{}", secrets: [generateKeyPair().publicKey], now }))).toBe(
+      "no-matching-signature",
+    );
+  });
+
+  it("refuses to verify with a secret key, which belongs only to the sender", () => {
+    const { secretKey } = generateKeyPair();
+    const signed = signWebhook({ id: "msg_1", timestamp: 1, body: "{}", secrets: [secretKey] });
+    expect(() => verifyWebhook({ headers: signed, body: "{}", secrets: [secretKey], now: 1000 })).toThrow(/whpk_/);
   });
 });

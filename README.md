@@ -28,6 +28,8 @@ This library handles both sides. The sender keeps an outbox, retries with backof
 | Forged or replayed request | Receiver acts on it | HMAC signature over id, timestamp and body; timestamps older than 5 minutes rejected |
 | Endpoint URL points at an internal address | The sender calls its own network (SSRF) | Private, loopback, link-local and reserved addresses are refused after DNS resolution |
 | Endpoint can only take so much traffic | A backlog arrives all at once | `rateLimit` (requests per second) and `maxConcurrency` per endpoint |
+| `order.paid` retried and arrives after `order.shipped` | Receiver sees events out of order | Optional ordering key: events with the same key reach each endpoint in publish order |
+| Receiver should not hold a key that can sign | A leaked receiver secret lets anyone forge webhooks | ed25519 keys (`v1a`): the receiver only gets the public key |
 
 ## Dashboard
 
@@ -147,6 +149,32 @@ Each endpoint can also set how much traffic it takes:
 
 `rateLimit` is requests per second; deliveries over it wait without using up attempts. `maxConcurrency` (default 1) is how many requests to that endpoint are in flight at once. Both apply per dispatcher process ([ADR 0008](docs/adr/0008-network-guard-and-endpoint-limits.md)).
 
+### Ordering
+
+Pass an `orderingKey`, usually the id of the entity the event is about:
+
+```ts
+await dispatcher.publish({ type: "order.paid", payload, orderingKey: order.id });
+await dispatcher.publish({ type: "order.shipped", payload, orderingKey: order.id });
+```
+
+For each endpoint, a delivery waits while an earlier one with the same key is pending or being sent, so `order.shipped` is not sent before `order.paid` is delivered, even if `order.paid` needs retries. Events with other keys, or without one, are not held up. If the earlier delivery is dead-lettered, the next one goes ahead; a delivery that waits longer than `maxAgeMs` is dead-lettered as `expired` ([ADR 0009](docs/adr/0009-ordering-keys.md)).
+
+### Metrics and cleanup
+
+Each dispatcher counts attempts by outcome, request durations, deliveries, dead letters by reason and postponements by reason. `dispatcher.metrics.snapshot()` returns them per endpoint; `await dispatcher.prometheus()` returns the Prometheus text format, with queue sizes and breaker state read from the store. The dashboard serves the same text at `api/metrics`, behind its token.
+
+Finished rows stay in the store until they are purged:
+
+```ts
+const DAY = 86_400_000;
+new WebhookDispatcher({ store, endpoints, retention: { deliveredMs: 7 * DAY, deadMs: 30 * DAY } });
+// start() then purges every 10 minutes. Or call it from your own job:
+await dispatcher.purge({ deliveredMs: 7 * DAY, deadMs: 30 * DAY });
+```
+
+Pending deliveries are never purged.
+
 ## Receiving
 
 ```ts
@@ -178,9 +206,25 @@ Processed ids are kept for 4 days by default, longer than the sender's retry win
 
 To verify without the idempotency layer, `verifyWebhook({ headers, body, secrets })` returns the id and timestamp or throws `WebhookVerificationError` with a `reason`.
 
+### ed25519 keys
+
+With an HMAC secret, the receiver holds the same secret that signs, so a leak on the receiver's side lets anyone forge webhooks. With an ed25519 key pair the sender keeps the secret key and the receiver gets only the public key. Both kinds can be on one endpoint, which is how you migrate.
+
+```ts
+const { secretKey, publicKey } = generateKeyPair();   // whsk_... and whpk_...
+
+// Sender: the secret key goes in the endpoint's secrets and signs as v1a.
+{ id: "crm", url, secrets: [secretKey] }
+
+// Receiver: the public key goes in its secrets.
+new WebhookReceiver({ secrets: [publicKey] });
+```
+
+Keys are serialized as `whsk_`/`whpk_` plus the base64 raw 32-byte key, as the Standard Webhooks specification suggests ([ADR 0010](docs/adr/0010-ed25519-signatures.md)). In the dashboard, "Add ed25519 key" adds one and shows the public key to copy.
+
 ## Running with a database
 
-In production the store should be a database shared by every process that publishes or sends. A store implements eight methods, the important one being a conditional update on a version number. Any database with a conditional write works.
+In production the store should be a database shared by every process that publishes or sends. A store implements eight methods, the important one being a conditional update on a version number, plus `head()` for ordering keys and `purge()` for cleanup if you use them. Any database with a conditional write works.
 
 [examples/postgres-store.ts](examples/postgres-store.ts) has a PostgreSQL implementation of the three stores (deliveries, endpoints and received ids). Its tests run the full simulator against a real PostgreSQL engine compiled to WebAssembly (PGlite).
 
@@ -227,8 +271,7 @@ With the circuit breaker on, the analytics endpoint receives 10 requests during 
 
 ## Not handled
 
-- Ordering. Deliveries to one endpoint are sent in due order within a tick, but a retried message can arrive after newer ones. Receivers that care should compare the event's own timestamp or version.
-- Cleanup of delivered rows. Delete them on your own schedule.
+- Ordering without an `orderingKey`. Without a key, a retried message can arrive after newer ones.
 - Payload size limits.
 - Rate limits shared between processes. `rateLimit` is enforced per dispatcher; with several, divide it between them.
 - Users, roles and an audit log in the dashboard. It has one shared token; put it behind your own authentication if you need more.
@@ -237,7 +280,7 @@ With the circuit breaker on, the analytics endpoint receives 10 requests during 
 
 | Member | Description |
 | --- | --- |
-| `new WebhookDispatcher(options)` | `store`, `endpoints` (array or `EndpointStore`), `transport`, `retry`, `breaker`, `timeoutMs`, `leaseMs`, `historyLimit`, `random`, `newId` |
+| `new WebhookDispatcher(options)` | `store`, `endpoints` (array or `EndpointStore`), `transport`, `retry`, `breaker`, `timeoutMs`, `leaseMs`, `historyLimit`, `retention`, `random`, `newId` |
 | `publish(event, now?)` | Stores one delivery per subscribed endpoint (or per `event.endpointIds`); idempotent on `event.id` |
 | `prepare(event, now?)` | Builds the deliveries without storing them |
 | `tick(now?, limit?)` | Sends what is due; returns counts of attempted, delivered, retried, dead, postponed |
@@ -246,10 +289,13 @@ With the circuit breaker on, the analytics endpoint receives 10 requests during 
 | `enableEndpoint(id)` | Re-enables an endpoint disabled by a 410 |
 | `setEndpoints(endpoints)` / `listEndpoints()` | Replaces / reads the endpoints (an array or an `EndpointStore`) |
 | `onAttempt(listener)` / `onDead(listener)` | Called after each attempt / each dead letter |
+| `purge(retention, now?)` | Deletes finished deliveries older than `deliveredMs` / `deadMs` |
+| `metrics.snapshot()` / `prometheus()` | Counters per endpoint / the Prometheus text format |
 | `new WebhookReceiver(options)` | `secrets`, `toleranceMs`, `store`, `leaseMs`, `retainMs` |
 | `handle({ headers, body }, handler, now?)` | Verifies, deduplicates, runs the handler; returns `{ status, outcome }` |
 | `nodeHandler(receiver, handler)` | `node:http` / Express handler |
 | `signWebhook` / `verifyWebhook` / `generateSecret` | Signatures |
+| `generateKeyPair()` / `publicKeyFor(secretKey)` | ed25519 keys |
 | `MemoryDeliveryStore` / `MemoryEndpointStore` / `MemoryIdempotencyStore` | Reference stores |
 | `createDashboard({ dispatcher, endpoints, token? })` | `node:http` handler for the dashboard page and its API |
 | `startPlayground(options?)` | The dashboard with simulated receivers, as in `npm run dashboard` |
@@ -268,6 +314,8 @@ With the circuit breaker on, the analytics endpoint receives 10 requests during 
 - [0006 · An explicit clock](docs/adr/0006-explicit-clock.md)
 - [0007 · A dashboard served by the library](docs/adr/0007-dashboard.md)
 - [0008 · Private addresses, rate limits and concurrency per endpoint](docs/adr/0008-network-guard-and-endpoint-limits.md)
+- [0009 · Ordering keys](docs/adr/0009-ordering-keys.md)
+- [0010 · ed25519 signatures](docs/adr/0010-ed25519-signatures.md)
 
 ## Development
 

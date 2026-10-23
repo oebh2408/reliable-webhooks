@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CopyButton, ErrorNote, PageHeader, health, useAction } from "@/components/common";
 import { DeliveriesTable } from "@/components/deliveries";
-import { api, type Endpoint } from "@/lib/api";
+import { api, type Endpoint, type EndpointDetail } from "@/lib/api";
 import { relative } from "@/lib/format";
 import { navigate, usePolling } from "@/lib/hooks";
 
@@ -232,7 +232,7 @@ function SettingsCard({ endpoint, onSaved }: { endpoint: Endpoint; onSaved: () =
   );
 }
 
-function SecretsCard({ endpoint, onChange }: { endpoint: Endpoint; onChange: () => unknown }) {
+function SecretsCard({ endpoint, onChange }: { endpoint: EndpointDetail; onChange: () => unknown }) {
   const [shown, setShown] = useState<Set<number>>(new Set());
   const { run, busy } = useAction();
   const toggle = (i: number) => setShown((s) => (s.has(i) ? new Set([...s].filter((x) => x !== i)) : new Set([...s, i])));
@@ -241,37 +241,58 @@ function SecretsCard({ endpoint, onChange }: { endpoint: Endpoint; onChange: () 
       <CardHeader>
         <CardTitle>Signing secrets</CardTitle>
         <CardDescription>
-          Every request is signed with each secret. To rotate: add a new one, update the receiver, then remove the old one.
+          Every request is signed with each secret. To rotate: add a new one, update the receiver, then remove the old one. For an
+          ed25519 key, the receiver gets only the public key.
         </CardDescription>
-        <CardAction>
+        <CardAction className="flex flex-col items-end gap-2">
           <Button variant="outline" size="sm" disabled={busy} onClick={() => run(() => api.rotateSecret(endpoint.id), "New secret added", onChange)}>
             <KeyRoundIcon />
             Add secret
           </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={busy}
+            onClick={() => run(() => api.rotateSecret(endpoint.id, "ed25519"), "New ed25519 key added", onChange)}
+          >
+            Add ed25519 key
+          </Button>
         </CardAction>
       </CardHeader>
       <CardContent className="space-y-2">
-        {endpoint.secrets.map((secret, i) => (
-          <div key={secret} className="flex items-center gap-2 rounded-md border px-3 py-2">
-            <code className="min-w-0 flex-1 truncate font-mono text-xs">{shown.has(i) ? secret : `${secret.slice(0, 10)}${"•".repeat(24)}`}</code>
-            {i === 0 && <Badge variant="secondary">newest</Badge>}
-            <Button variant="ghost" size="icon" aria-label={shown.has(i) ? "Hide" : "Show"} onClick={() => toggle(i)}>
-              {shown.has(i) ? <EyeOffIcon /> : <EyeIcon />}
-            </Button>
-            <CopyButton value={secret} />
-            {endpoint.secrets.length > 1 && (
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="Remove"
-                disabled={busy}
-                onClick={() => run(() => api.removeSecret(endpoint.id, i), "Secret removed", () => (setShown(new Set()), onChange()))}
-              >
-                <Trash2Icon />
-              </Button>
-            )}
-          </div>
-        ))}
+        {endpoint.secrets.map((secret, i) => {
+          const publicKey = endpoint.publicKeys?.[i];
+          return (
+            <div key={secret} className="flex items-center gap-2 rounded-md border px-3 py-2">
+              {publicKey ? (
+                <code className="min-w-0 flex-1 truncate font-mono text-xs" title="Public key, for the receiver">
+                  {publicKey}
+                </code>
+              ) : (
+                <code className="min-w-0 flex-1 truncate font-mono text-xs">{shown.has(i) ? secret : `${secret.slice(0, 10)}${"•".repeat(24)}`}</code>
+              )}
+              {publicKey && <Badge variant="outline">ed25519</Badge>}
+              {i === 0 && <Badge variant="secondary">newest</Badge>}
+              {!publicKey && (
+                <Button variant="ghost" size="icon" aria-label={shown.has(i) ? "Hide" : "Show"} onClick={() => toggle(i)}>
+                  {shown.has(i) ? <EyeOffIcon /> : <EyeIcon />}
+                </Button>
+              )}
+              <CopyButton value={publicKey ?? secret} />
+              {endpoint.secrets.length > 1 && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Remove"
+                  disabled={busy}
+                  onClick={() => run(() => api.removeSecret(endpoint.id, i), "Secret removed", () => (setShown(new Set()), onChange()))}
+                >
+                  <Trash2Icon />
+                </Button>
+              )}
+            </div>
+          );
+        })}
       </CardContent>
     </Card>
   );

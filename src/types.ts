@@ -37,6 +37,12 @@ export interface WebhookEvent {
   id?: string;
   /** Send only to these endpoints, whatever event types they subscribe to. For test events. */
   endpointIds?: string[];
+  /**
+   * Events with the same key reach each endpoint in the order they were
+   * published: a delivery waits while an earlier one with the key is pending.
+   * Typically the id of the entity the event is about. See ADR 0009.
+   */
+  orderingKey?: string;
 }
 
 export type DeliveryStatus = "pending" | "sending" | "delivered" | "dead";
@@ -72,6 +78,10 @@ export interface Delivery {
   /** The exact bytes that are signed and sent. */
   body: string;
   createdAt: number;
+  /** From {@link WebhookEvent.orderingKey}. */
+  orderingKey?: string;
+  /** Position among deliveries with the same ordering key: publish time in microseconds, made unique per dispatcher. */
+  sequence?: number;
   /** Start of the current retry cycle: `createdAt`, or when it was last redelivered. `maxAgeMs` counts from here. */
   cycleStartedAt: number;
   status: DeliveryStatus;

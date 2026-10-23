@@ -41,6 +41,18 @@ export interface DeliveryStore {
   list(query: DeliveryQuery): Promise<Delivery[]>;
   /** Number of deliveries per endpoint and status. */
   counts(): Promise<DeliveryCount[]>;
+  /**
+   * The `pending` or `sending` delivery with the lowest `sequence` among those
+   * to `endpointId` with this ordering key. Needed only for events with an
+   * `orderingKey`. Index `(endpointId, orderingKey, sequence)` on unfinished rows.
+   */
+  head?(endpointId: string, orderingKey: string): Promise<Delivery | undefined>;
+  /**
+   * Deletes up to `limit` deliveries with this status (`delivered` or `dead`)
+   * that finished before `before`. Returns how many were deleted. Needed only
+   * for {@link WebhookDispatcher.purge}.
+   */
+  purge?(status: "delivered" | "dead", before: number, limit: number): Promise<number>;
   getEndpointState(endpointId: string): Promise<EndpointState | undefined>;
   /** Last write wins. Breaker counters are advisory, see ADR 0004. */
   saveEndpointState(state: EndpointState): Promise<void>;
@@ -114,6 +126,31 @@ export class MemoryDeliveryStore implements DeliveryStore {
       counts.set(key, c);
     }
     return [...counts.values()];
+  }
+
+  async head(endpointId: string, orderingKey: string): Promise<Delivery | undefined> {
+    await tick();
+    let first: Delivery | undefined;
+    for (const d of this.rows.values()) {
+      if (d.endpointId !== endpointId || d.orderingKey !== orderingKey) continue;
+      if (d.status !== "pending" && d.status !== "sending") continue;
+      if (!first || (d.sequence ?? 0) < (first.sequence ?? 0)) first = d;
+    }
+    return first && copy(first);
+  }
+
+  async purge(status: "delivered" | "dead", before: number, limit: number): Promise<number> {
+    await tick();
+    let deleted = 0;
+    for (const [id, d] of this.rows) {
+      if (deleted >= limit) break;
+      const finished = status === "delivered" ? d.deliveredAt : d.deadAt;
+      if (d.status === status && finished !== undefined && finished < before) {
+        this.rows.delete(id);
+        deleted++;
+      }
+    }
+    return deleted;
   }
 
   async getEndpointState(endpointId: string): Promise<EndpointState | undefined> {

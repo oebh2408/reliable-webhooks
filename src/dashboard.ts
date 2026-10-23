@@ -4,7 +4,7 @@ import { timingSafeEqual } from "node:crypto";
 import type { WebhookDispatcher } from "./dispatcher.js";
 import type { EndpointStore } from "./endpoints.js";
 import { readBody } from "./http.js";
-import { generateSecret } from "./signature.js";
+import { generateKeyPair, generateSecret, isSecretKey, publicKeyFor } from "./signature.js";
 import type { Attempt, Delivery, DeliveryStatus, Endpoint } from "./types.js";
 
 export interface DashboardOptions {
@@ -67,7 +67,7 @@ export function createDashboard(options: DashboardOptions): Handler {
     ["GET", /^\/api\/endpoints\/([^/]+)$/, ([id]) => endpointDetail(id!)],
     ["PATCH", /^\/api\/endpoints\/([^/]+)$/, ([id], body) => updateEndpoint(id!, body)],
     ["DELETE", /^\/api\/endpoints\/([^/]+)$/, async ([id]) => ({ deleted: await endpoints.delete(id!) })],
-    ["POST", /^\/api\/endpoints\/([^/]+)\/secrets$/, ([id]) => rotate(id!)],
+    ["POST", /^\/api\/endpoints\/([^/]+)\/secrets$/, ([id], body) => rotate(id!, body)],
     ["DELETE", /^\/api\/endpoints\/([^/]+)\/secrets\/(\d+)$/, ([id, n]) => removeSecret(id!, Number(n))],
     ["POST", /^\/api\/endpoints\/([^/]+)\/enable$/, async ([id]) => (await mustGet(id!), await dispatcher.enableEndpoint(id!), {})],
     ["POST", /^\/api\/endpoints\/([^/]+)\/test$/, ([id], body) => sendTest(id!, body)],
@@ -88,13 +88,14 @@ export function createDashboard(options: DashboardOptions): Handler {
     const [list, counts] = await Promise.all([endpoints.list(), store.counts()]);
     const totals = Object.fromEntries(STATUSES.map((s) => [s, 0])) as Record<DeliveryStatus, number>;
     for (const c of counts) totals[c.status] += c.count;
+    const metrics = new Map(dispatcher.metrics.snapshot().map((m) => [m.endpointId, m]));
     const rows = await Promise.all(
       list.map(async (e) => {
         const [state, recent] = await Promise.all([store.getEndpointState(e.id), store.list({ endpointId: e.id, order: "desc", limit: 20 })]);
         const lastAttempt = recent.flatMap((d) => d.history).reduce<Attempt | null>((a, b) => (!a || b.at > a.at ? b : a), null);
         const byStatus = Object.fromEntries(STATUSES.map((s) => [s, 0])) as Record<DeliveryStatus, number>;
         for (const c of counts) if (c.endpointId === e.id) byStatus[c.status] += c.count;
-        return { ...mask(e), state: state ?? null, counts: byStatus, lastAttempt };
+        return { ...mask(e), state: state ?? null, counts: byStatus, lastAttempt, metrics: metrics.get(e.id) ?? null };
       }),
     );
     return { now: Date.now(), totals, endpoints: rows.sort((a, b) => a.id.localeCompare(b.id)) };
@@ -102,7 +103,7 @@ export function createDashboard(options: DashboardOptions): Handler {
 
   async function endpointDetail(id: string) {
     const e = await mustGet(id);
-    return { ...e, state: (await store.getEndpointState(id)) ?? null };
+    return { ...withKeys(e), state: (await store.getEndpointState(id)) ?? null };
   }
 
   async function createEndpoint(body: any) {
@@ -123,11 +124,12 @@ export function createDashboard(options: DashboardOptions): Handler {
     return next;
   }
 
-  async function rotate(id: string) {
+  async function rotate(id: string, body: any) {
     const e = await mustGet(id);
-    const next = { ...e, secrets: [generateSecret(), ...e.secrets] };
+    const secret = body?.kind === "ed25519" ? generateKeyPair().secretKey : generateSecret();
+    const next = { ...e, secrets: [secret, ...e.secrets] };
     await endpoints.save(next);
-    return next;
+    return withKeys(next);
   }
 
   async function removeSecret(id: string, n: number) {
@@ -136,7 +138,7 @@ export function createDashboard(options: DashboardOptions): Handler {
     if (n < 0 || n >= e.secrets.length) throw new HttpError(404, "no such secret");
     const next = { ...e, secrets: e.secrets.filter((_, i) => i !== n) };
     await endpoints.save(next);
-    return next;
+    return withKeys(next);
   }
 
   async function sendTest(id: string, body: any) {
@@ -148,7 +150,8 @@ export function createDashboard(options: DashboardOptions): Handler {
   async function publish(body: any) {
     if (typeof body?.type !== "string" || !body.type.trim()) throw new HttpError(400, "type is required");
     const endpointIds = Array.isArray(body.endpointIds) && body.endpointIds.length ? body.endpointIds.map(String) : undefined;
-    return dispatcher.publish({ type: body.type.trim(), payload: body.payload ?? {}, endpointIds });
+    const orderingKey = typeof body.orderingKey === "string" && body.orderingKey.trim() ? body.orderingKey.trim().slice(0, 200) : undefined;
+    return dispatcher.publish({ type: body.type.trim(), payload: body.payload ?? {}, endpointIds, orderingKey });
   }
 
   async function deliveries(url: URL) {
@@ -208,6 +211,11 @@ export function createDashboard(options: DashboardOptions): Handler {
         // a page on another domain that resolves to 127.0.0.1 still sends its own host name.
         throw new HttpError(403, "without a token, the dashboard API only answers on localhost");
       }
+      if (req.method === "GET" && api === "/api/metrics") {
+        res.writeHead(200, { "content-type": "text/plain; version=0.0.4; charset=utf-8", "cache-control": "no-store" });
+        res.end(await dispatcher.prometheus());
+        return;
+      }
       if (req.method === "POST") {
         // A JSON content type cannot be sent cross-site without a CORS preflight, which this server never approves.
         // PATCH and DELETE always need a preflight.
@@ -250,6 +258,11 @@ function json(res: ServerResponse, status: number, value: unknown): void {
 /** Overview and lists never include secrets; the endpoint detail does. */
 function mask(e: Endpoint): Omit<Endpoint, "secrets"> & { secrets: number } {
   return { ...e, secrets: e.secrets.length };
+}
+
+/** The endpoint with the public key of each ed25519 secret, which is what receivers need. */
+function withKeys(e: Endpoint) {
+  return { ...e, publicKeys: e.secrets.map((s) => (isSecretKey(s) ? publicKeyFor(s) : null)) };
 }
 
 function summary(d: Delivery) {

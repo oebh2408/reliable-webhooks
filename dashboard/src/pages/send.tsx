@@ -16,6 +16,7 @@ export function SendPage() {
   const overview = usePolling(api.overview, [], 10_000);
   const [type, setType] = useState("order.paid");
   const [payload, setPayload] = useState(SAMPLE);
+  const [orderingKey, setOrderingKey] = useState("");
   const [only, setOnly] = useState<Set<string>>(new Set());
   const { run, busy } = useAction();
 
@@ -42,7 +43,12 @@ export function SendPage() {
                 if (!parsed.ok) return;
                 let messageId = "";
                 const ok = await run(async () => {
-                  const r = await api.publish({ type, payload: parsed.value, endpointIds: only.size ? [...only] : undefined });
+                  const r = await api.publish({
+                    type,
+                    payload: parsed.value,
+                    endpointIds: only.size ? [...only] : undefined,
+                    orderingKey: orderingKey.trim() || undefined,
+                  });
                   messageId = r.messageId;
                   if (!r.deliveries.length) throw new Error("No endpoint is subscribed to this event type");
                 }, "Event published");
@@ -63,6 +69,11 @@ export function SendPage() {
                   onChange={(e) => setPayload(e.target.value)}
                 />
                 {!parsed.ok && <p className="text-xs text-red-600 dark:text-red-400">{parsed.error}</p>}
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="ordering">Ordering key</Label>
+                <Input id="ordering" placeholder="Optional, for example ord_1042" value={orderingKey} onChange={(e) => setOrderingKey(e.target.value)} />
+                <p className="text-muted-foreground text-xs">Events with the same key reach each endpoint in the order they were published.</p>
               </div>
               <div className="flex justify-end">
                 <Button type="submit" disabled={busy || !parsed.ok}>

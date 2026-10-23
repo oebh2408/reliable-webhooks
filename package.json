@@ -1,6 +1,6 @@
 {
   "name": "reliable-webhooks",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Send and receive webhooks with retries, backoff, signatures, idempotency and dead letters, plus a dashboard to manage them. Zero runtime dependencies.",
   "keywords": [
     "webhooks",
@@ -8,6 +8,7 @@
     "retry",
     "backoff",
     "hmac",
+    "ed25519",
     "signature",
     "idempotency",
     "dead-letter-queue",

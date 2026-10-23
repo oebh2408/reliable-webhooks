@@ -21,3 +21,7 @@ export function prettyJson(text: string): string {
 export function attemptLabel(a: { status: number; error?: string }): string {
   return a.status ? String(a.status) : (a.error ?? "no response");
 }
+
+export function duration(ms: number): string {
+  return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
+}

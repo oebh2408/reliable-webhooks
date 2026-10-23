@@ -1,8 +1,10 @@
 export { WebhookDispatcher, defaultBreaker } from "./dispatcher.js";
-export type { AttemptEvent, BreakerOptions, DispatcherOptions, PublishResult, TickReport } from "./dispatcher.js";
+export { DispatcherMetrics } from "./metrics.js";
+export type { EndpointMetrics, PostponeReason } from "./metrics.js";
+export type { AttemptEvent, BreakerOptions, DispatcherOptions, PublishResult, RetentionOptions, TickReport } from "./dispatcher.js";
 export { WebhookReceiver, MemoryIdempotencyStore } from "./receiver.js";
 export type { ClaimResult, IdempotencyStore, ReceivedWebhook, ReceiveOutcome, ReceiveResult, ReceiverOptions } from "./receiver.js";
-export { signWebhook, verifyWebhook, generateSecret, WebhookVerificationError } from "./signature.js";
+export { signWebhook, verifyWebhook, generateSecret, generateKeyPair, publicKeyFor, isSecretKey, WebhookVerificationError } from "./signature.js";
 export type { HeaderBag, SignedHeaders, VerificationFailure, VerifyOptions } from "./signature.js";
 export { classify, retryDelay, parseRetryAfter, defaultRetryPolicy } from "./retry.js";
 export type { Outcome, RetryPolicy } from "./retry.js";

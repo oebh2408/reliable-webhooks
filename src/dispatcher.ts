@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { httpTransport } from "./http.js";
+import { DispatcherMetrics, type PostponeReason } from "./metrics.js";
 import { classify, defaultRetryPolicy, parseRetryAfter, retryDelay, type Outcome, type RetryPolicy } from "./retry.js";
 import { signWebhook } from "./signature.js";
 import type { EndpointStore } from "./endpoints.js";
@@ -41,6 +42,19 @@ export interface DispatcherOptions {
   /** Generates message ids. Default `msg_` plus 24 hex characters. */
   newId?: () => string;
   userAgent?: string;
+  /**
+   * How long finished deliveries are kept. When set, `start()` calls
+   * {@link WebhookDispatcher.purge} with it every 10 minutes. Needs a store
+   * with `purge`.
+   */
+  retention?: RetentionOptions;
+}
+
+export interface RetentionOptions {
+  /** Delete delivered rows this long after delivery. */
+  deliveredMs?: number;
+  /** Delete dead letters this long after they died. */
+  deadMs?: number;
 }
 
 export interface AttemptEvent {
@@ -56,7 +70,7 @@ export interface TickReport {
   delivered: number;
   retried: number;
   dead: number;
-  /** Deliveries pushed back because the endpoint's breaker was open or the endpoint is paused. */
+  /** Deliveries pushed back without an attempt: open breaker, paused endpoint, rate limit or ordering. */
   postponed: number;
   /** Deliveries another worker changed first. */
   conflicts: number;
@@ -79,6 +93,8 @@ export interface PublishResult {
 export class WebhookDispatcher {
   private endpoints: Endpoint[] | EndpointStore = [];
   readonly store: DeliveryStore;
+  /** Counters since this dispatcher started; see {@link DispatcherMetrics}. */
+  readonly metrics = new DispatcherMetrics();
   private readonly transport: Transport;
   private readonly retry: RetryPolicy;
   private readonly breaker: BreakerOptions | undefined;
@@ -88,6 +104,8 @@ export class WebhookDispatcher {
   private readonly random: () => number;
   private readonly newId: () => string;
   private readonly userAgent: string;
+  private readonly retention: RetentionOptions | undefined;
+  private lastSequence = 0;
   private readonly attemptListeners: ((e: AttemptEvent) => void)[] = [];
   private readonly deadListeners: ((d: Delivery) => void)[] = [];
   /** Endpoints this dispatcher is sending to right now, so overlapping ticks leave them alone. */
@@ -106,6 +124,8 @@ export class WebhookDispatcher {
     this.random = options.random ?? Math.random;
     this.newId = options.newId ?? (() => `msg_${randomBytes(12).toString("hex")}`);
     this.userAgent = options.userAgent ?? "reliable-webhooks";
+    this.retention = options.retention;
+    if (this.retention && !this.store.purge) throw new Error("retention needs a store that implements purge()");
     if (this.leaseMs <= this.timeoutMs) throw new Error("leaseMs must be longer than timeoutMs");
   }
 
@@ -148,6 +168,9 @@ export class WebhookDispatcher {
   async prepare(event: WebhookEvent, now = Date.now()): Promise<Delivery[]> {
     const messageId = event.id ?? this.newId();
     const body = JSON.stringify({ type: event.type, timestamp: new Date(now).toISOString(), data: event.payload });
+    if (event.orderingKey !== undefined && !this.store.head) throw new Error("orderingKey needs a store that implements head()");
+    // Strictly increasing within this dispatcher, so two events in the same millisecond keep their order.
+    const sequence = event.orderingKey === undefined ? undefined : (this.lastSequence = Math.max(now * 1000, this.lastSequence + 1));
     const deliveries: Delivery[] = [];
     for (const endpoint of await this.listEndpoints()) {
       if (event.endpointIds) {
@@ -161,6 +184,7 @@ export class WebhookDispatcher {
         eventType: event.type,
         body,
         createdAt: now,
+        ...(sequence === undefined ? {} : { orderingKey: event.orderingKey, sequence }),
         cycleStartedAt: now,
         status: "pending",
         attempts: 0,
@@ -211,7 +235,39 @@ export class WebhookDispatcher {
    */
   start(intervalMs = 1_000): () => void {
     const timer = setInterval(() => void this.tick().catch(() => undefined), intervalMs);
-    return () => clearInterval(timer);
+    const retention = this.retention;
+    const purge = retention && (() => void this.purge(retention).catch(() => undefined));
+    purge?.();
+    const purgeTimer = purge && setInterval(purge, PURGE_INTERVAL_MS);
+    return () => {
+      clearInterval(timer);
+      if (purgeTimer) clearInterval(purgeTimer);
+    };
+  }
+
+  /**
+   * Deletes finished deliveries older than the given ages, in batches of
+   * `batchSize`, until none are left. Pending deliveries are never touched.
+   */
+  async purge(options: RetentionOptions & { batchSize?: number }, now = Date.now()): Promise<{ delivered: number; dead: number }> {
+    const store = this.store;
+    if (!store.purge) throw new Error("this store does not implement purge()");
+    const batch = options.batchSize ?? 1_000;
+    const run = async (status: "delivered" | "dead", ageMs: number | undefined) => {
+      if (ageMs === undefined) return 0;
+      let total = 0;
+      for (let n = batch; n === batch; total += n) n = await store.purge!(status, now - ageMs, batch);
+      this.metrics.purged(status, total);
+      return total;
+    };
+    return { delivered: await run("delivered", options.deliveredMs), dead: await run("dead", options.deadMs) };
+  }
+
+  /** {@link DispatcherMetrics.prometheus} with queue sizes and breaker state read from the store. */
+  async prometheus(now = Date.now()): Promise<string> {
+    const endpoints = await this.listEndpoints();
+    const states = (await Promise.all(endpoints.map((e) => this.store.getEndpointState(e.id)))).filter((s): s is EndpointState => !!s);
+    return this.metrics.prometheus({ counts: await this.store.counts(), states, now });
   }
 
   /** Dead-lettered deliveries, oldest first. */
@@ -269,14 +325,24 @@ export class WebhookDispatcher {
         await this.finish(delivery, delivery.version, { status: "dead", deadAt: now, deadReason: "expired" }, report);
         return;
       }
-      const wait = state.openUntil > now || endpoint.paused ? 0 : this.rateWait(endpoint, now);
-      if (state.openUntil > now || endpoint.paused || wait > 0) {
-        const until = endpoint.paused ? now + PAUSE_RECHECK_MS : wait > 0 ? now + wait : state.openUntil;
+      const postpone = async (until: number, reason: PostponeReason) => {
         const ok = await this.store.update({ ...delivery, status: "pending", nextAttemptAt: until }, delivery.version);
-        if (ok) report.postponed++;
-        else report.conflicts++;
-        return;
+        if (ok) {
+          report.postponed++;
+          this.metrics.postponed(endpoint.id, reason);
+        } else report.conflicts++;
+      };
+      if (endpoint.paused) return postpone(now + PAUSE_RECHECK_MS, "paused");
+      if (state.openUntil > now) return postpone(state.openUntil, "breaker");
+      if (delivery.orderingKey !== undefined && this.store.head) {
+        const head = await this.store.head(endpoint.id, delivery.orderingKey);
+        // Wait for the earlier delivery: until its next attempt, or briefly while someone is sending it.
+        if (head && head.id !== delivery.id) {
+          return postpone(head.status === "sending" ? now + ORDER_RECHECK_MS : Math.max(now, head.nextAttemptAt), "ordering");
+        }
       }
+      const wait = this.rateWait(endpoint, now);
+      if (wait > 0) return postpone(now + wait, "rate-limit");
 
       // Take the lease. If the worker dies after this, the delivery comes due again when the lease expires.
       const claimed: Delivery = { ...delivery, status: "sending", nextAttemptAt: now + this.leaseMs };
@@ -294,6 +360,7 @@ export class WebhookDispatcher {
       const attempts = delivery.attempts + 1;
       const base = { ...claimed, attempts, history };
       report.attempted++;
+      this.metrics.attempt(endpoint.id, outcome, attempt.durationMs);
 
       let breakerOpenedUntil: number | undefined;
       let result: Delivery;
@@ -329,7 +396,8 @@ export class WebhookDispatcher {
     };
 
     // Up to maxConcurrency requests to this endpoint at a time; the breaker state is shared between them.
-    const queue = [...list];
+    // Due at the same time, earlier ordered deliveries go first.
+    const queue = [...list].sort((a, b) => a.nextAttemptAt - b.nextAttemptAt || (a.sequence ?? 0) - (b.sequence ?? 0));
     const wanted = Math.floor(endpoint?.maxConcurrency ?? 1);
     const lanes = Number.isFinite(wanted) ? Math.max(1, Math.min(MAX_CONCURRENCY, wanted)) : 1;
     await Promise.all(
@@ -397,9 +465,13 @@ export class WebhookDispatcher {
       report.conflicts++;
       return;
     }
-    if (next.status === "delivered") report.delivered++;
+    if (next.status === "delivered") {
+      report.delivered++;
+      this.metrics.delivered(next.endpointId);
+    }
     if (next.status === "dead") {
       report.dead++;
+      this.metrics.dead(next.endpointId, next.deadReason ?? "rejected");
       for (const l of this.deadListeners) safely(() => l({ ...next, version: expectedVersion + 1 }));
     }
   }
@@ -414,6 +486,11 @@ const BLOCKED = "blocked-address";
 
 /** Upper bound for `Endpoint.maxConcurrency`. */
 const MAX_CONCURRENCY = 50;
+
+/** How often a delivery waiting behind one that is being sent checks again. */
+const ORDER_RECHECK_MS = 1_000;
+
+const PURGE_INTERVAL_MS = 10 * 60_000;
 
 /** How often deliveries to a paused endpoint are looked at again. */
 const PAUSE_RECHECK_MS = 10_000;

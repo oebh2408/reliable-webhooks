@@ -80,6 +80,12 @@ function DeliverySheet({ id, onClose, onChange }: { id: string | null; onClose: 
             <dl className="grid grid-cols-[8rem_1fr] gap-x-4 gap-y-2 text-sm">
               <dt className="text-muted-foreground">Message id</dt>
               <dd className="font-mono text-xs">{d.messageId}</dd>
+              {d.orderingKey && (
+                <>
+                  <dt className="text-muted-foreground">Ordering key</dt>
+                  <dd className="font-mono text-xs break-all">{d.orderingKey}</dd>
+                </>
+              )}
               <dt className="text-muted-foreground">Created</dt>
               <dd>{time(d.createdAt)}</dd>
               <dt className="text-muted-foreground">Attempts</dt>

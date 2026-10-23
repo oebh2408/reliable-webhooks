@@ -136,6 +136,33 @@ describe("dashboard API", () => {
     expect((await endpoints.get("shop"))!.rateLimit).toBeUndefined();
   });
 
+  it("adds ed25519 keys and shows their public keys, and publishes with an ordering key", async () => {
+    const { call, endpoints, dispatcher } = await setup();
+    await call("POST", "/api/endpoints", { id: "shop", url: "https://shop.example.com/" });
+    const added = await call("POST", "/api/endpoints/shop/secrets", { kind: "ed25519" });
+    expect(added.body.secrets[0]).toMatch(/^whsk_/);
+    expect(added.body.publicKeys).toEqual([expect.stringMatching(/^whpk_/), null]);
+    expect((await call("GET", "/api/endpoints/shop")).body.publicKeys[0]).toBe(added.body.publicKeys[0]);
+    expect((await endpoints.get("shop"))!.secrets).toHaveLength(2);
+    await call("POST", "/api/events", { type: "a", payload: {}, orderingKey: " ord_1 " });
+    expect((await dispatcher.store.list({}))[0]!.orderingKey).toBe("ord_1");
+  });
+
+  it("serves Prometheus metrics behind the same token", async () => {
+    const { base, call, dispatcher } = await setup("t0ken");
+    await call("POST", "/api/endpoints", { id: "shop", url: "https://shop.example.com/" });
+    await call("POST", "/api/events", { type: "a", payload: {} });
+    await dispatcher.tick();
+    expect((await fetch(base + "/api/metrics")).status).toBe(401);
+    const res = await fetch(base + "/api/metrics", { headers: { authorization: "Bearer t0ken" } });
+    expect(res.headers.get("content-type")).toContain("text/plain");
+    const text = await res.text();
+    expect(text).toContain('webhook_attempts_total{endpoint="shop",outcome="success"} 1');
+    expect(text).toContain('webhook_deliveries{endpoint="shop",status="delivered"} 1');
+    const overview = await call("GET", "/api/overview");
+    expect(overview.body.endpoints[0].metrics).toMatchObject({ endpointId: "shop", successRate: 1 });
+  });
+
   it("sends test events only to the chosen endpoint, whatever its event types", async () => {
     const { call, dispatcher, sent } = await setup();
     await call("POST", "/api/endpoints", { id: "a", url: "https://a.example.com/", eventTypes: ["order.paid"] });

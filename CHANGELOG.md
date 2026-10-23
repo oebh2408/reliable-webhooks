@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0
+
+- Ordering keys: events with the same `orderingKey` reach each endpoint in the order they were published, across retries and workers. New optional store method `head()`; the PostgreSQL example adds three columns and two indexes (`SCHEMA` adds them to existing tables). See ADR 0009.
+- ed25519 signatures (`v1a`) with `whsk_` secret keys; receivers verify with the `whpk_` public key. `generateKeyPair()` and `publicKeyFor()`. See ADR 0010.
+- Metrics: `dispatcher.metrics` (attempts by outcome, durations, dead letters and postponements by reason) and `dispatcher.prometheus()`. The dashboard shows success rate and p95 per endpoint and serves `api/metrics`.
+- Cleanup: `dispatcher.purge()` and the `retention` option. New optional store method `purge()`.
+- Dashboard: add ed25519 keys and copy their public key; ordering key when sending an event.
+- Publishing workflow for npm on GitHub releases.
+
 ## 0.3.0
 
 - The default transport is now `httpTransport()`, on `node:http`. It refuses private, loopback, link-local and reserved addresses after DNS resolution, so endpoint URLs cannot reach the internal network. `allowPrivateNetworks: true` turns this off. Blocked requests are dead-lettered with the error `blocked-address`. See ADR 0008.

@@ -1,4 +1,5 @@
 import type { Attempt, Delivery, DeliveryStatus, Endpoint, EndpointState } from "../../../src/types.js";
+import type { EndpointMetrics } from "../../../src/metrics.js";
 
 export type { Attempt, Delivery, DeliveryStatus, Endpoint, EndpointState };
 
@@ -9,7 +10,11 @@ export interface EndpointRow extends Omit<Endpoint, "secrets"> {
   state: EndpointState | null;
   counts: Counts;
   lastAttempt: Attempt | null;
+  metrics: EndpointMetrics | null;
 }
+
+/** The endpoint detail: `publicKeys[i]` is the receiver's key for an ed25519 `secrets[i]`, null for HMAC. */
+export type EndpointDetail = Endpoint & { publicKeys: (string | null)[] };
 
 export interface Overview {
   now: number;
@@ -71,7 +76,7 @@ const enc = encodeURIComponent;
 
 export const api = {
   overview: () => request<Overview>("GET", "overview"),
-  endpoint: (id: string) => request<Endpoint & { state: EndpointState | null }>("GET", `endpoints/${enc(id)}`),
+  endpoint: (id: string) => request<EndpointDetail & { state: EndpointState | null }>("GET", `endpoints/${enc(id)}`),
   createEndpoint: (input: { id?: string; url: string; description?: string; eventTypes?: string[] }) =>
     request<Endpoint>("POST", "endpoints", input),
   updateEndpoint: (
@@ -81,7 +86,7 @@ export const api = {
   ) =>
     request<Endpoint>("PATCH", `endpoints/${enc(id)}`, input),
   deleteEndpoint: (id: string) => request<{ deleted: boolean }>("DELETE", `endpoints/${enc(id)}`, {}),
-  rotateSecret: (id: string) => request<Endpoint>("POST", `endpoints/${enc(id)}/secrets`, {}),
+  rotateSecret: (id: string, kind: "hmac" | "ed25519" = "hmac") => request<EndpointDetail>("POST", `endpoints/${enc(id)}/secrets`, { kind }),
   removeSecret: (id: string, index: number) => request<Endpoint>("DELETE", `endpoints/${enc(id)}/secrets/${index}`, {}),
   enable: (id: string) => request<object>("POST", `endpoints/${enc(id)}/enable`, {}),
   sendTest: (id: string) => request<{ messageId: string }>("POST", `endpoints/${enc(id)}/test`, {}),
@@ -93,7 +98,7 @@ export const api = {
   },
   delivery: (id: string) => request<Delivery>("GET", `deliveries/${enc(id)}`),
   redeliver: (id: string) => request<{ requeued: number }>("POST", `deliveries/${enc(id)}/redeliver`, {}),
-  publish: (input: { type: string; payload: unknown; endpointIds?: string[] }) =>
+  publish: (input: { type: string; payload: unknown; endpointIds?: string[]; orderingKey?: string }) =>
     request<{ messageId: string; deliveries: string[] }>("POST", "events", input),
   playground: () => request<PlaygroundState>("GET", "playground"),
   setPlayground: (input: Partial<Pick<PlaygroundState, "traffic" | "analyticsDown" | "legacyFixed">>) =>
