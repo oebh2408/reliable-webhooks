@@ -69,7 +69,7 @@ When the dispatcher gets its endpoints from an `EndpointStore`, it reads them on
 
 ## Install
 
-Not on npm yet. Install from GitHub; the package is built on install:
+Install from GitHub; the package is built on install:
 
 ```bash
 npm install github:oebh2408/reliable-webhooks

@@ -7,7 +7,6 @@
 - Metrics: `dispatcher.metrics` (attempts by outcome, durations, dead letters and postponements by reason) and `dispatcher.prometheus()`. The dashboard shows success rate and p95 per endpoint and serves `api/metrics`.
 - Cleanup: `dispatcher.purge()` and the `retention` option. New optional store method `purge()`.
 - Dashboard: add ed25519 keys and copy their public key; ordering key when sending an event.
-- Publishing workflow for npm on GitHub releases.
 
 ## 0.3.0
 
